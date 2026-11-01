@@ -15,8 +15,8 @@ namespace phs {
 // allowing the plugin wrapper (VST3 / CLAP / AU) to notify the host for automation.
 using ParamChangeCallback = std::function<void(uint32_t paramId, float normalizedValue)>;
 
-static constexpr int kEditorWidth = 1000;
-static constexpr int kEditorHeight = 680;
+static constexpr int kEditorWidth = 880;
+static constexpr int kEditorHeight = 580;
 
 // Creates a retained NSView* instance backed by our CoreGraphics editor.
 // Caller owns the returned NSView* (call [view release] or CFRelease when destroying).

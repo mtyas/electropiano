@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PyPHSElectricPiano VERSION 1.0.0 LANGUAGES C CXX)
+project(electropiano VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -68,50 +68,50 @@ endif()
 # ==============================================================================
 # 1. CLAP Plugin Target
 # ==============================================================================
-add_library(PyPHS_CLAP MODULE
+add_library(electropiano_CLAP MODULE
     src/formats/clap_entry.mm
     ${GUI_SOURCES}
     ${DSP_HEADERS}
 )
-set_target_properties(PyPHS_CLAP PROPERTIES
-    OUTPUT_NAME "PyPHS Electric Piano"
+set_target_properties(electropiano_CLAP PROPERTIES
+    OUTPUT_NAME "electropiano"
     PREFIX ""
     SUFFIX ".clap"
 )
-target_compile_definitions(PyPHS_CLAP PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_CLAP)
-target_link_libraries(PyPHS_CLAP PRIVATE ${PLATFORM_LIBS})
+target_compile_definitions(electropiano_CLAP PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_CLAP)
+target_link_libraries(electropiano_CLAP PRIVATE ${PLATFORM_LIBS})
 
 if(APPLE)
-    set_target_properties(PyPHS_CLAP PROPERTIES
+    set_target_properties(electropiano_CLAP PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION "clap"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.pyphs.pianoelectro.clap"
-        MACOSX_BUNDLE_BUNDLE_NAME "PyPHS Electric Piano"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.clap"
+        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
     )
 endif()
 
 # ==============================================================================
 # 2. VST3 Plugin Target
 # ==============================================================================
-add_library(PyPHS_VST3 MODULE
+add_library(electropiano_VST3 MODULE
     src/formats/vst3_entry.mm
     ${GUI_SOURCES}
     ${DSP_HEADERS}
 )
-set_target_properties(PyPHS_VST3 PROPERTIES
-    OUTPUT_NAME "PyPHS Electric Piano"
+set_target_properties(electropiano_VST3 PROPERTIES
+    OUTPUT_NAME "electropiano"
     PREFIX ""
     SUFFIX ".vst3"
 )
-target_compile_definitions(PyPHS_VST3 PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_VST3)
-target_link_libraries(PyPHS_VST3 PRIVATE ${PLATFORM_LIBS})
+target_compile_definitions(electropiano_VST3 PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_VST3)
+target_link_libraries(electropiano_VST3 PRIVATE ${PLATFORM_LIBS})
 
 if(APPLE)
-    set_target_properties(PyPHS_VST3 PROPERTIES
+    set_target_properties(electropiano_VST3 PROPERTIES
         BUNDLE TRUE
         BUNDLE_EXTENSION "vst3"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.pyphs.pianoelectro.vst3"
-        MACOSX_BUNDLE_BUNDLE_NAME "PyPHS Electric Piano"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.vst3"
+        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
     )
 endif()
 
@@ -119,39 +119,39 @@ endif()
 # 3. AudioUnit v2 (macOS only)
 # ==============================================================================
 if(APPLE)
-    add_library(PyPHS_AU MODULE
+    add_library(electropiano_AU MODULE
         src/formats/au_entry.mm
         ${GUI_SOURCES}
         ${DSP_HEADERS}
     )
-    set_target_properties(PyPHS_AU PROPERTIES
-        OUTPUT_NAME "PyPHS Electric Piano"
+    set_target_properties(electropiano_AU PROPERTIES
+        OUTPUT_NAME "electropiano"
         PREFIX ""
         BUNDLE TRUE
         BUNDLE_EXTENSION "component"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.pyphs.pianoelectro.audiounit"
-        MACOSX_BUNDLE_BUNDLE_NAME "PyPHS Electric Piano"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.audiounit"
+        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
     )
-    target_compile_definitions(PyPHS_AU PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_AU)
-    target_link_libraries(PyPHS_AU PRIVATE ${PLATFORM_LIBS})
+    target_compile_definitions(electropiano_AU PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_AU)
+    target_link_libraries(electropiano_AU PRIVATE ${PLATFORM_LIBS})
 endif()
 
 # ==============================================================================
 # 4. Standalone Application
 # ==============================================================================
 if(APPLE)
-    add_executable(PyPHS_App MACOSX_BUNDLE
+    add_executable(electropiano_App MACOSX_BUNDLE
         src/formats/standalone_app.mm
         ${GUI_SOURCES}
         ${DSP_HEADERS}
     )
-    set_target_properties(PyPHS_App PROPERTIES
-        OUTPUT_NAME "PyPHS Electric Piano"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "org.pyphs.pianoelectro.standalone"
-        MACOSX_BUNDLE_BUNDLE_NAME "PyPHS Electric Piano"
+    set_target_properties(electropiano_App PROPERTIES
+        OUTPUT_NAME "electropiano"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.standalone"
+        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
     )
-    target_compile_definitions(PyPHS_App PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_Standalone)
-    target_link_libraries(PyPHS_App PRIVATE ${PLATFORM_LIBS})
+    target_compile_definitions(electropiano_App PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_Standalone)
+    target_link_libraries(electropiano_App PRIVATE ${PLATFORM_LIBS})
 endif()
 
 # ==============================================================================

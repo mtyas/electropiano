@@ -51,7 +51,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "1973 Suitcase Rhodes Mk I",
         PresetCategory::RhodesVintage,
-        "PyPHS Laboratory",
+        "mtyas",
         "Classic 1973 Suitcase with stereo auto-pan vibrato, warm tone-bar sustain, and gentle pickup bark on hard accents.",
         false, false, "",
         {{
@@ -83,7 +83,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "1977 Stage Piano (Clean DI)",
         PresetCategory::RhodesVintage,
-        "PyPHS Laboratory",
+        "mtyas",
         "Pure direct injection passive Stage Mk I. Bell tone up front with natural woody decay and acoustic hammer felt.",
         false, false, "",
         {{
@@ -95,7 +95,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "1971 Silver Top Sparkle",
         PresetCategory::RhodesVintage,
-        "PyPHS Laboratory",
+        "mtyas",
         "Early teardrop felt hammer with distinctive percussive chime and slightly loose tone-bar resonance.",
         false, false, "",
         {{
@@ -107,7 +107,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Herbie Funk 1974 Wah-Pan",
         PresetCategory::RhodesVintage,
-        "PyPHS Laboratory",
+        "mtyas",
         "Hot preamp driving a sweeping 4-stage optical phaser with wide stereo tremolo for Head Hunters funk grooves.",
         false, false, "",
         {{
@@ -121,7 +121,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Wurlitzer 200A Reedy Bark",
         PresetCategory::Wurlitzer,
-        "PyPHS Laboratory",
+        "mtyas",
         "Signature 1974 200A electric reed piano. Punchy steel reed envelope with deep tube bark on fortissimo accents.",
         false, false, "",
         {{
@@ -133,7 +133,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Super-tramp 200A Stage",
         PresetCategory::Wurlitzer,
-        "PyPHS Laboratory",
+        "mtyas",
         "Tight electrostatic pickup gap, pushed preamp saturation, and built-in optical tremolo for iconic rock intros.",
         false, false, "",
         {{
@@ -145,7 +145,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Wurlitzer 140B Tube Velvet",
         PresetCategory::Wurlitzer,
-        "PyPHS Laboratory",
+        "mtyas",
         "Early 1960s all-tube 140B model. Softer felt hammers, smoother pickup response, and warm tube compression.",
         false, false, "",
         {{
@@ -157,7 +157,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Queen 'You're My Best Friend'",
         PresetCategory::Wurlitzer,
-        "PyPHS Laboratory",
+        "mtyas",
         "Cranky 200A driven through a vintage stereo chorus pedal with warm tube bass push.",
         false, false, "",
         {{
@@ -171,7 +171,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Dyno-My-Piano LA 80s Bell",
         PresetCategory::DynoMod80s,
-        "PyPHS Laboratory",
+        "mtyas",
         "Hot-rodded Chuck Monte Dyno preamp mod. Tight pickup proximity, high treble boost, and lush bucket-brigade chorus.",
         false, false, "",
         {{
@@ -183,7 +183,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Crystal Ballad Ball",
         PresetCategory::DynoMod80s,
-        "PyPHS Laboratory",
+        "mtyas",
         "The quintessential David Foster / 1980s power ballad electric piano with extended crystalline chime overtones.",
         false, false, "",
         {{
@@ -195,7 +195,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "LA Studio Session Mk II",
         PresetCategory::DynoMod80s,
-        "PyPHS Laboratory",
+        "mtyas",
         "High-definition 1980 flat-top Mk II with active EQ modification and fast transient attack for dense West Coast mixes.",
         false, false, "",
         {{
@@ -207,7 +207,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "R&B Neo Soul Butter",
         PresetCategory::DynoMod80s,
-        "PyPHS Laboratory",
+        "mtyas",
         "Warm, scooped mid response with gentle pickup tape-saturation and silky stereo modulation for slow jams.",
         false, false, "",
         {{
@@ -221,7 +221,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Deep Space Nebula Rhodes",
         PresetCategory::AmbientFX,
-        "PyPHS Laboratory",
+        "mtyas",
         "Cavernous hall plate reverb paired with a slow 4-stage optical phaser and soaring singing tines.",
         false, false, "",
         {{
@@ -233,7 +233,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Vaporwave Tape Cassette",
         PresetCategory::AmbientFX,
-        "PyPHS Laboratory",
+        "mtyas",
         "Warbled vibrato mod, warm tube drive, and lo-fi Baxandall filtering replicating worn cassette tapes.",
         false, false, "",
         {{
@@ -245,7 +245,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Port-Hamiltonian Strumming",
         PresetCategory::AmbientFX,
-        "PyPHS Laboratory",
+        "mtyas",
         "Maximum tone-bar coupled energy transfer creating an acoustic 12-string resonance harp texture.",
         false, false, "",
         {{
@@ -257,7 +257,7 @@ static const std::vector<PresetItem> kExpandedFactoryPresets = {
     {
         "Sub-Bark Bass Electric",
         PresetCategory::AmbientFX,
-        "PyPHS Laboratory",
+        "mtyas",
         "Heavy bass boost with hard hammer strike position for funky electric piano bass lines.",
         false, false, "",
         {{
@@ -280,23 +280,23 @@ public:
 #if defined(_WIN32)
         const char* appData = std::getenv("APPDATA");
         if (appData) {
-            return std::string(appData) + "\\PyPHSElectricPiano\\Presets";
+            return std::string(appData) + "\\mtyas\\electropiano\\Presets";
         }
         return "presets";
 #elif defined(__APPLE__)
         const char* home = std::getenv("HOME");
         if (home) {
-            return std::string(home) + "/Library/Application Support/PyPHSElectricPiano/Presets";
+            return std::string(home) + "/Library/Application Support/mtyas/electropiano/Presets";
         }
         return "presets";
 #else
         const char* xdgData = std::getenv("XDG_DATA_HOME");
         if (xdgData) {
-            return std::string(xdgData) + "/PyPHSElectricPiano/Presets";
+            return std::string(xdgData) + "/mtyas/electropiano/Presets";
         }
         const char* home = std::getenv("HOME");
         if (home) {
-            return std::string(home) + "/.local/share/PyPHSElectricPiano/Presets";
+            return std::string(home) + "/.local/share/mtyas/electropiano/Presets";
         }
         return "presets";
 #endif

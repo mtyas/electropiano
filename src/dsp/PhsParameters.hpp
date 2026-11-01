@@ -51,31 +51,31 @@ struct ParamInfo {
 };
 
 static constexpr std::array<ParamInfo, kNumParams> kParamMetadata = {{
-    {kParamModelType,        "Model Type",         "Model",    "",    "Model",     0.0f, 3.0f, 0.0f, true},
-    {kParamHammerHardness,   "Hammer Hardness",    "Hardness", "%",   "Mechanics", 0.0f, 1.0f, 0.48f, false},
-    {kParamHammerHysteresis, "Hammer Hysteresis",  "FeltLoss", "%",   "Mechanics", 0.0f, 1.0f, 0.35f, false},
-    {kParamStrikePosition,   "Strike Position",    "Strike",   "x/L", "Mechanics", 0.08f, 0.42f, 0.18f, false},
-    {kParamTineDecay,        "Tine / Reed Decay",  "Decay",    "s",   "Mechanics", 0.15f, 1.0f, 0.65f, false},
-    {kParamTineBell,         "Tine Bell Modes",    "Bell",     "%",   "Mechanics", 0.0f, 1.0f, 0.45f, false},
-    {kParamToneBarCoupling,   "ToneBar Coupling",   "ToneBar",  "%",   "Mechanics", 0.0f, 1.0f, 0.55f, false},
-    {kParamKeyNoise,         "Key / Action Noise", "KeyThump", "%",   "Mechanics", 0.0f, 1.0f, 0.30f, false},
+    {kParamModelType,        "Model",           "Model",    "",    "Model",     0.0f, 3.0f, 0.0f, true},
+    {kParamHammerHardness,   "Hardness",        "Hardness", "%",   "Mechanics", 0.0f, 1.0f, 0.48f, false},
+    {kParamHammerHysteresis, "Cushion",         "Cushion",  "%",   "Mechanics", 0.0f, 1.0f, 0.35f, false},
+    {kParamStrikePosition,   "Strike",          "Strike",   "x/L", "Mechanics", 0.08f, 0.42f, 0.18f, false},
+    {kParamTineDecay,        "Decay",           "Decay",    "s",   "Mechanics", 0.15f, 1.0f, 0.65f, false},
+    {kParamTineBell,         "Chime",           "Chime",    "%",   "Mechanics", 0.0f, 1.0f, 0.45f, false},
+    {kParamToneBarCoupling,  "Tonebar",         "Tonebar",  "%",   "Mechanics", 0.0f, 1.0f, 0.55f, false},
+    {kParamKeyNoise,         "Thump",           "Thump",    "%",   "Mechanics", 0.0f, 1.0f, 0.30f, false},
 
-    {kParamPickupDistance,   "Pickup Distance",    "AirGap",   "mm",  "Pickup",    0.0f, 1.0f, 0.52f, false},
-    {kParamPickupSymmetry,   "Pickup Alignment",   "Voicing",  "%",   "Pickup",    0.0f, 1.0f, 0.38f, false},
-    {kParamPickupResonance,  "Coil / Cap Q",       "PickupQ",  "%",   "Pickup",    0.0f, 1.0f, 0.45f, false},
-    {kParamPreampDrive,      "Preamp Drive",       "Drive",    "%",   "Pickup",    0.0f, 1.0f, 0.32f, false},
-    {kParamBassBoost,        "Bass Tone",          "Bass",     "dB",  "Pickup",    0.0f, 1.0f, 0.55f, false},
-    {kParamTrebleBoost,      "Treble Tone",        "Treble",   "dB",  "Pickup",    0.0f, 1.0f, 0.52f, false},
+    {kParamPickupDistance,   "Air Gap",         "AirGap",   "mm",  "Pickup",    0.0f, 1.0f, 0.52f, false},
+    {kParamPickupSymmetry,   "Voicing",         "Voicing",  "%",   "Pickup",    0.0f, 1.0f, 0.38f, false},
+    {kParamPickupResonance,  "Coil Q",          "CoilQ",    "%",   "Pickup",    0.0f, 1.0f, 0.45f, false},
+    {kParamPreampDrive,      "Drive",           "Drive",    "%",   "Pickup",    0.0f, 1.0f, 0.32f, false},
+    {kParamBassBoost,        "Bass",            "Bass",     "dB",  "Pickup",    0.0f, 1.0f, 0.55f, false},
+    {kParamTrebleBoost,      "Treble",          "Treble",   "dB",  "Pickup",    0.0f, 1.0f, 0.52f, false},
 
-    {kParamTremoloDepth,     "Tremolo Depth",      "Tremolo",  "%",   "Effects",   0.0f, 1.0f, 0.35f, false},
-    {kParamTremoloRate,      "Tremolo Rate",       "TremRate", "Hz",  "Effects",   0.0f, 1.0f, 0.42f, false},
-    {kParamPhaserMix,        "Phaser Mix",         "Phaser",   "%",   "Effects",   0.0f, 1.0f, 0.00f, false},
-    {kParamPhaserRate,       "Phaser Rate",        "PhasRate", "Hz",  "Effects",   0.0f, 1.0f, 0.28f, false},
-    {kParamChorusMix,        "Stereo Chorus",      "Chorus",   "%",   "Effects",   0.0f, 1.0f, 0.00f, false},
-    {kParamReverbMix,        "Reverb Mix",         "Reverb",   "%",   "Effects",   0.0f, 1.0f, 0.22f, false},
-    {kParamReverbDecay,      "Reverb Decay",       "RevTime",  "%",   "Effects",   0.0f, 1.0f, 0.45f, false},
-    {kParamVelocityCurve,    "Velocity Curve",     "VelCurve", "%",   "Effects",   0.0f, 1.0f, 0.50f, false},
-    {kParamMasterVolume,     "Master Volume",      "Master",   "dB",  "Effects",   0.0f, 1.0f, 0.78f, false}
+    {kParamTremoloDepth,     "Depth",           "Depth",    "%",   "Effects",   0.0f, 1.0f, 0.35f, false},
+    {kParamTremoloRate,      "Speed",           "Speed",    "Hz",  "Effects",   0.0f, 1.0f, 0.42f, false},
+    {kParamPhaserMix,        "Phaser",          "Phaser",   "%",   "Effects",   0.0f, 1.0f, 0.00f, false},
+    {kParamPhaserRate,       "Rate",            "Rate",     "Hz",  "Effects",   0.0f, 1.0f, 0.28f, false},
+    {kParamChorusMix,        "Chorus",          "Chorus",   "%",   "Effects",   0.0f, 1.0f, 0.00f, false},
+    {kParamReverbMix,        "Mix",             "Mix",      "%",   "Effects",   0.0f, 1.0f, 0.22f, false},
+    {kParamReverbDecay,      "Decay",           "Decay",    "%",   "Effects",   0.0f, 1.0f, 0.45f, false},
+    {kParamVelocityCurve,    "Touch",           "Touch",    "%",   "Effects",   0.0f, 1.0f, 0.50f, false},
+    {kParamMasterVolume,     "Volume",          "Volume",   "dB",  "Effects",   0.0f, 1.0f, 0.78f, false}
 }};
 
 struct Preset {

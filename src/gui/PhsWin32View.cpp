@@ -7,7 +7,7 @@
 
 namespace {
 
-const wchar_t* kWin32ClassName = L"PyPHSElectricPianoEditor";
+const wchar_t* kWin32ClassName = L"electropianoEditor";
 
 struct Win32EditorState {
     phs::PhsSynthEngine* engine = nullptr;
@@ -54,7 +54,7 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
                                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                           CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
             HFONT oldFont = static_cast<HFONT>(SelectObject(memDC, titleFont));
-            TextOutW(memDC, 20, 15, L"PyPHS Electric Piano", 20);
+            TextOutW(memDC, 20, 15, L"electropiano by mtyas", 20);
 
             SetTextColor(memDC, RGB(110, 190, 240));
             HFONT subFont = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,

@@ -25,13 +25,12 @@ enum class KnobStyle {
 struct KnobRect {
     uint32_t paramId;
     NSRect rect;
-    const char* line1;
-    const char* line2;
+    const char* label;
     const char* sectionName;
     KnobStyle style;
 };
 
-// Formats parameter value for display
+// Formats parameter value for clean single-line display
 static NSString* formatParamValue(uint32_t id, float norm) {
     if (id >= phs::kNumParams) return @"";
     const auto& meta = phs::kParamMetadata[id];
@@ -63,7 +62,7 @@ static NSString* formatParamValue(uint32_t id, float norm) {
             return [NSString stringWithFormat:@"%.2f L", val];
 
         case phs::kParamTineDecay:
-            return [NSString stringWithFormat:@"%.2f s", val];
+            return [NSString stringWithFormat:@"%.1f s", val];
 
         case phs::kParamPickupDistance:
             return [NSString stringWithFormat:@"%.2f mm", 0.5f + norm * 4.5f];
@@ -117,6 +116,7 @@ static NSImage* gRockerInactive = nil;
     NSRect presetNextRect_;
     NSRect presetBoxRect_;
     NSRect presetBrowseButtonRect_;
+    NSRect aboutButtonRect_;
     NSRect pedalSwitchRect_;
     NSRect pitchBendRect_;
     NSRect modWheelRect_;
@@ -135,6 +135,14 @@ static NSImage* gRockerInactive = nil;
     NSRect categoryTabRects_[6];
     phs::PresetCategory selectedCategory_;
     int selectedPresetIdx_;
+
+    // About Modal
+    bool aboutOpen_;
+    NSRect aboutModalRect_;
+    NSRect aboutCloseRect_;
+    NSRect aboutWebLinkRect_;
+    NSRect aboutKofiLinkRect_;
+    NSRect aboutGithubLinkRect_;
 
     // Mouse Interaction
     int draggedKnobIdx_;
@@ -213,6 +221,7 @@ static void init3dAssets() {
         draggedKnobIdx_ = -1;
         mouseHeldMidiNote_ = -1;
         browserOpen_ = false;
+        aboutOpen_ = false;
         selectedCategory_ = phs::PresetCategory::All;
         selectedPresetIdx_ = 0;
         lastClickTimestamp_ = 0;
@@ -262,71 +271,81 @@ static void init3dAssets() {
 - (void)setupLayout {
     knobs_.clear();
 
-    // 1. Top Header Bar (y: 624 .. 672)
+    // =========================================================================
+    // 1. TOP HEADER BAR (y: 532 .. 574)
+    // =========================================================================
+    // Model Selectors (x: 184 .. 428, 4 buttons of w: 58, h: 26)
     for (int i = 0; i < 4; ++i) {
-        modelButtonRects_[i] = NSMakeRect(202.0 + i * 80.0, 632.0, 76.0, 28.0);
+        modelButtonRects_[i] = NSMakeRect(184.0 + i * 62.0, 538.0, 58.0, 26.0);
     }
-    undoButtonRect_         = NSMakeRect(530.0, 632.0, 44.0, 28.0);
-    redoButtonRect_         = NSMakeRect(578.0, 632.0, 44.0, 28.0);
-    midiLearnButtonRect_    = NSMakeRect(628.0, 632.0, 64.0, 28.0);
-    presetPrevRect_         = NSMakeRect(702.0, 632.0, 20.0, 28.0);
-    presetBoxRect_          = NSMakeRect(724.0, 632.0, 168.0, 28.0);
-    presetNextRect_         = NSMakeRect(894.0, 632.0, 20.0, 28.0);
-    presetBrowseButtonRect_ = NSMakeRect(918.0, 632.0, 56.0, 28.0);
+    undoButtonRect_         = NSMakeRect(444.0, 538.0, 38.0, 26.0);
+    redoButtonRect_         = NSMakeRect(486.0, 538.0, 38.0, 26.0);
+    midiLearnButtonRect_    = NSMakeRect(528.0, 538.0, 48.0, 26.0);
+    presetPrevRect_         = NSMakeRect(580.0, 538.0, 20.0, 26.0);
+    presetBoxRect_          = NSMakeRect(602.0, 538.0, 140.0, 26.0);
+    presetNextRect_         = NSMakeRect(744.0, 538.0, 20.0, 26.0);
+    presetBrowseButtonRect_ = NSMakeRect(768.0, 538.0, 46.0, 26.0);
+    aboutButtonRect_        = NSMakeRect(818.0, 538.0, 44.0, 26.0);
 
-    // 2. UPPER DECK: PIANO CORE ENGINE (y: 368 .. 618)
-    pianoDeckRect_ = NSMakeRect(24.0, 368.0, 952.0, 250.0);
+    // =========================================================================
+    // 2. UPPER DECK: PIANO CORE ENGINE (y: 312 .. 524, h: 212)
+    // =========================================================================
+    pianoDeckRect_ = NSMakeRect(20.0, 312.0, 840.0, 212.0);
 
-    // Section 1: TINE & HAMMER MECHANICS (x: 32 .. 568, w: 536)
-    // Row 1 (y: 494)
-    knobs_.push_back({phs::kParamHammerHardness,   NSMakeRect(40.0,  494.0, 66.0, 88.0), "Hammer", "Hardness",  "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamHammerHysteresis, NSMakeRect(174.0, 494.0, 66.0, 88.0), "Hammer", "Felt Loss",  "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamStrikePosition,   NSMakeRect(308.0, 494.0, 66.0, 88.0), "Strike", "Position",   "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamTineDecay,        NSMakeRect(442.0, 494.0, 66.0, 88.0), "Tine",   "Decay",      "MECHANICS", KnobStyle::Mechanics});
+    // Section 1: TINE & HAMMER MECHANICS (x: 26 .. 508, w: 482)
+    // Row 1 (y: 420, h: 76)
+    knobs_.push_back({phs::kParamHammerHardness,   NSMakeRect(40.0,  420.0, 58.0, 76.0), "Hardness", "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamHammerHysteresis, NSMakeRect(160.0, 420.0, 58.0, 76.0), "Cushion",  "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamStrikePosition,   NSMakeRect(280.0, 420.0, 58.0, 76.0), "Strike",   "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamTineDecay,        NSMakeRect(400.0, 420.0, 58.0, 76.0), "Decay",    "MECHANICS", KnobStyle::Mechanics});
 
-    // Row 2 (y: 386)
-    knobs_.push_back({phs::kParamTineBell,         NSMakeRect(40.0,  386.0, 66.0, 88.0), "Bell",   "Modes",      "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamToneBarCoupling,  NSMakeRect(174.0, 386.0, 66.0, 88.0), "ToneBar", "Coupling",  "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamKeyNoise,         NSMakeRect(308.0, 386.0, 66.0, 88.0), "Key",    "Noise",     "MECHANICS", KnobStyle::Mechanics});
-    knobs_.push_back({phs::kParamVelocityCurve,    NSMakeRect(442.0, 386.0, 66.0, 88.0), "Velocity", "Curve",    "MECHANICS", KnobStyle::Mechanics});
+    // Row 2 (y: 326, h: 76)
+    knobs_.push_back({phs::kParamTineBell,         NSMakeRect(40.0,  326.0, 58.0, 76.0), "Chime",    "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamToneBarCoupling,  NSMakeRect(160.0, 326.0, 58.0, 76.0), "Tonebar",  "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamKeyNoise,         NSMakeRect(280.0, 326.0, 58.0, 76.0), "Thump",    "MECHANICS", KnobStyle::Mechanics});
+    knobs_.push_back({phs::kParamVelocityCurve,    NSMakeRect(400.0, 326.0, 58.0, 76.0), "Touch",    "MECHANICS", KnobStyle::Mechanics});
 
-    // Section 2: TRANSDUCER PICKUP & TONE EQ (x: 580 .. 968, w: 388)
-    // Row 1 (y: 494)
-    knobs_.push_back({phs::kParamPickupDistance,   NSMakeRect(598.0, 494.0, 66.0, 88.0), "Pickup", "Air Gap",    "PICKUP", KnobStyle::Pickup});
-    knobs_.push_back({phs::kParamPickupSymmetry,   NSMakeRect(726.0, 494.0, 66.0, 88.0), "Pickup", "Voicing",    "PICKUP", KnobStyle::Pickup});
-    knobs_.push_back({phs::kParamPickupResonance,  NSMakeRect(854.0, 494.0, 66.0, 88.0), "Coil",   "Resonance",  "PICKUP", KnobStyle::Pickup});
+    // Section 2: TRANSDUCER PICKUP & TONE EQ (x: 516 .. 852, w: 336)
+    // Row 1 (y: 420)
+    knobs_.push_back({phs::kParamPickupDistance,   NSMakeRect(530.0, 420.0, 58.0, 76.0), "Air Gap",  "PICKUP", KnobStyle::Pickup});
+    knobs_.push_back({phs::kParamPickupSymmetry,   NSMakeRect(640.0, 420.0, 58.0, 76.0), "Voicing",  "PICKUP", KnobStyle::Pickup});
+    knobs_.push_back({phs::kParamPickupResonance,  NSMakeRect(750.0, 420.0, 58.0, 76.0), "Coil Q",   "PICKUP", KnobStyle::Pickup});
 
-    // Row 2 (y: 386)
-    knobs_.push_back({phs::kParamBassBoost,        NSMakeRect(662.0, 386.0, 66.0, 88.0), "Bass",   "Tone",       "PICKUP", KnobStyle::Pickup});
-    knobs_.push_back({phs::kParamTrebleBoost,      NSMakeRect(790.0, 386.0, 66.0, 88.0), "Treble", "Tone",       "PICKUP", KnobStyle::Pickup});
+    // Row 2 (y: 326)
+    knobs_.push_back({phs::kParamBassBoost,        NSMakeRect(585.0, 326.0, 58.0, 76.0), "Bass",     "PICKUP", KnobStyle::Pickup});
+    knobs_.push_back({phs::kParamTrebleBoost,      NSMakeRect(695.0, 326.0, 58.0, 76.0), "Treble",   "PICKUP", KnobStyle::Pickup});
 
-    // 3. LOWER DECK: VINTAGE EFFECTS RACK (y: 120 .. 356)
-    fxDeckRect_ = NSMakeRect(24.0, 120.0, 952.0, 236.0);
+    // =========================================================================
+    // 3. LOWER DECK: VINTAGE EFFECTS RACK (y: 102 .. 302, h: 200)
+    // =========================================================================
+    fxDeckRect_ = NSMakeRect(20.0, 102.0, 840.0, 200.0);
 
-    // Module 1: Preamp Overdrive (x: 32 .. 192, w: 160)
-    knobs_.push_back({phs::kParamPreampDrive,      NSMakeRect(78.0,  166.0, 68.0, 92.0), "Preamp", "Drive",      "OVERDRIVE", KnobStyle::Drive});
+    // Module 1: Preamp Drive (x: 26 .. 134, w: 108)
+    knobs_.push_back({phs::kParamPreampDrive,      NSMakeRect(51.0,  140.0, 58.0, 78.0), "Drive",    "OVERDRIVE", KnobStyle::Drive});
 
-    // Module 2: Suitcase Tremolo / Pan (x: 200 .. 384, w: 184)
-    knobs_.push_back({phs::kParamTremoloRate,      NSMakeRect(216.0, 166.0, 66.0, 92.0), "Tremolo", "Rate",      "TREMOLO", KnobStyle::Modulation});
-    knobs_.push_back({phs::kParamTremoloDepth,     NSMakeRect(300.0, 166.0, 66.0, 92.0), "Tremolo", "Depth",     "TREMOLO", KnobStyle::Modulation});
+    // Module 2: Suitcase Tremolo / Pan (x: 140 .. 308, w: 168)
+    knobs_.push_back({phs::kParamTremoloRate,      NSMakeRect(158.0, 140.0, 58.0, 78.0), "Speed",    "TREMOLO", KnobStyle::Modulation});
+    knobs_.push_back({phs::kParamTremoloDepth,     NSMakeRect(236.0, 140.0, 58.0, 78.0), "Depth",    "TREMOLO", KnobStyle::Modulation});
 
-    // Module 3: Modulation (Phaser & Chorus) (x: 392 .. 668, w: 276)
-    knobs_.push_back({phs::kParamPhaserRate,       NSMakeRect(408.0, 166.0, 66.0, 92.0), "Phaser",  "Rate",      "MODULATION", KnobStyle::Modulation});
-    knobs_.push_back({phs::kParamPhaserMix,        NSMakeRect(496.0, 166.0, 66.0, 92.0), "Phaser",  "Mix",       "MODULATION", KnobStyle::Modulation});
-    knobs_.push_back({phs::kParamChorusMix,        NSMakeRect(584.0, 166.0, 66.0, 92.0), "Stereo",  "Chorus",    "MODULATION", KnobStyle::Modulation});
+    // Module 3: Modulation (Phaser & Chorus) (x: 314 .. 558, w: 244)
+    knobs_.push_back({phs::kParamPhaserRate,       NSMakeRect(330.0, 140.0, 58.0, 78.0), "Rate",     "MODULATION", KnobStyle::Modulation});
+    knobs_.push_back({phs::kParamPhaserMix,        NSMakeRect(406.0, 140.0, 58.0, 78.0), "Phaser",   "MODULATION", KnobStyle::Modulation});
+    knobs_.push_back({phs::kParamChorusMix,        NSMakeRect(482.0, 140.0, 58.0, 78.0), "Chorus",   "MODULATION", KnobStyle::Modulation});
 
-    // Module 4: Studio Reverb (x: 676 .. 860, w: 184)
-    knobs_.push_back({phs::kParamReverbDecay,      NSMakeRect(692.0, 166.0, 66.0, 92.0), "Reverb",  "Decay",     "REVERB", KnobStyle::Reverb});
-    knobs_.push_back({phs::kParamReverbMix,        NSMakeRect(776.0, 166.0, 66.0, 92.0), "Reverb",  "Mix",       "REVERB", KnobStyle::Reverb});
+    // Module 4: Studio Reverb (x: 564 .. 732, w: 168)
+    knobs_.push_back({phs::kParamReverbDecay,      NSMakeRect(582.0, 140.0, 58.0, 78.0), "Decay",    "REVERB", KnobStyle::Reverb});
+    knobs_.push_back({phs::kParamReverbMix,        NSMakeRect(660.0, 140.0, 58.0, 78.0), "Mix",      "REVERB", KnobStyle::Reverb});
 
-    // Module 5: Master Output (x: 868 .. 968, w: 100)
-    knobs_.push_back({phs::kParamMasterVolume,     NSMakeRect(884.0, 166.0, 68.0, 92.0), "Master",  "Volume",    "MASTER", KnobStyle::Reverb});
+    // Module 5: Master Output (x: 738 .. 854, w: 116)
+    knobs_.push_back({phs::kParamMasterVolume,     NSMakeRect(767.0, 140.0, 58.0, 78.0), "Volume",   "MASTER", KnobStyle::Reverb});
 
-    // 4. Performance Section (y: 8 .. 108)
-    pedalSwitchRect_ = NSMakeRect(18.0, 16.0, 58.0, 86.0);
-    pitchBendRect_   = NSMakeRect(82.0, 16.0, 26.0, 86.0);
-    modWheelRect_    = NSMakeRect(112.0, 16.0, 26.0, 86.0);
-    keyboardRect_    = NSMakeRect(146.0, 16.0, 836.0, 86.0);
+    // =========================================================================
+    // 4. PERFORMANCE SECTION (y: 8 .. 94)
+    // =========================================================================
+    pedalSwitchRect_ = NSMakeRect(22.0, 14.0, 48.0, 74.0);
+    pitchBendRect_   = NSMakeRect(76.0, 14.0, 24.0, 74.0);
+    modWheelRect_    = NSMakeRect(104.0, 14.0, 24.0, 74.0);
+    keyboardRect_    = NSMakeRect(136.0, 14.0, 718.0, 74.0);
 }
 
 // =============================================================================
@@ -340,7 +359,7 @@ static void init3dAssets() {
     CGContextSaveGState(ctx);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 
-    // 1. Walnut Wood End-Cheeks (Left: 0..16, Right: 984..1000)
+    // 1. Solid Hardwood End-Cheeks (American Walnut, Left: 0..14, Right: 866..880)
     auto drawWoodCheek = [&](CGFloat x, CGFloat w) {
         const CGFloat woodColors[16] = {
             0.18f, 0.09f, 0.04f, 1.0f,
@@ -355,45 +374,50 @@ static void init3dAssets() {
 
         CGContextSetRGBStrokeColor(ctx, 0.40f, 0.22f, 0.11f, 0.35f);
         CGContextSetLineWidth(ctx, 0.8f);
-        for (CGFloat gy = 8.0; gy < 670.0; gy += 14.0) {
+        for (CGFloat gy = 6.0; gy < 575.0; gy += 14.0) {
             CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(x + 2.0, gy), CGPointMake(x + w - 2.0, gy + 3.0)}, 2);
         }
     };
-    drawWoodCheek(0.0, 16.0);
-    drawWoodCheek(984.0, 16.0);
+    drawWoodCheek(0.0, 14.0);
+    drawWoodCheek(866.0, 14.0);
 
-    // 2. Main Chassis: Vintage Tolex Textured Body (x: 16 .. 984)
+    // 2. Main Chassis Faceplate: Deep Brushed Graphite / Charcoal Tolex
     const CGFloat tolexColors[8] = {
-        0.14f, 0.15f, 0.17f, 1.0f,
+        0.13f, 0.14f, 0.16f, 1.0f,
         0.06f, 0.07f, 0.08f, 1.0f
     };
     CGGradientRef tolexGrad = CGGradientCreateWithColorComponents(cs, tolexColors, nullptr, 2);
-    CGContextDrawLinearGradient(ctx, tolexGrad, CGPointMake(0, 680), CGPointMake(0, 0), 0);
+    CGContextDrawLinearGradient(ctx, tolexGrad, CGPointMake(0, 580), CGPointMake(0, 0), 0);
     CGGradientRelease(tolexGrad);
 
-    // Outer border trim
-    CGContextSetRGBStrokeColor(ctx, 0.25f, 0.27f, 0.32f, 0.8f);
+    // Precision chassis outer border
+    CGContextSetRGBStrokeColor(ctx, 0.26f, 0.28f, 0.33f, 0.85f);
     CGContextSetLineWidth(ctx, 1.0f);
-    CGContextStrokeRect(ctx, CGRectMake(16.5, 0.5, 967.0, 679.0));
+    CGContextStrokeRect(ctx, CGRectMake(14.5, 0.5, 851.0, 579.0));
 
     // 3. Top Header Bar
     [self drawHeaderBar:ctx];
 
-    // 4. UPPER DECK: PIANO CORE ENGINE (Physical Acoustics & Voicing)
+    // 4. UPPER DECK: PIANO CORE ENGINE
     [self drawPianoDeck:ctx];
 
-    // 5. LOWER DECK: VINTAGE EFFECTS RACK (Analog Stompbox & Studio Processing)
+    // 5. LOWER DECK: VINTAGE EFFECTS RACK
     [self drawEffectsDeck:ctx];
 
-    // 6. Draw All Knobs with their distinct 3D pre-rendered filmstrips
+    // 6. Draw Knobs with 3D Raytraced Blender Filmstrips & Short Labels
     [self drawAllKnobs:ctx];
 
-    // 7. Performance Section: Red Felt Rail, 61-Key Keyboard & Wheels
+    // 7. Performance Section: Red Felt Rail, Playable Keyboard & Wheels
     [self drawPerformanceSection:ctx];
 
-    // 8. Modal Preset Browser (if active)
+    // 8. Preset Browser Modal (if active)
     if (browserOpen_) {
         [self drawPresetBrowserModal:ctx];
+    }
+
+    // 9. About Info Modal (if active)
+    if (aboutOpen_) {
+        [self drawAboutModal:ctx];
     }
 
     CGColorSpaceRelease(cs);
@@ -401,7 +425,7 @@ static void init3dAssets() {
 }
 
 // =============================================================================
-// 1. TOP HEADER BAR
+// 1. TOP HEADER BAR: BRANDING, MODEL SELECTORS, PRESETS & ABOUT
 // =============================================================================
 - (void)drawHeaderBar:(CGContextRef)ctx {
     CGContextSaveGState(ctx);
@@ -413,30 +437,36 @@ static void init3dAssets() {
         0.09f, 0.10f, 0.12f, 1.0f
     };
     CGGradientRef hGrad = CGGradientCreateWithColorComponents(cs, hColors, nullptr, 2);
-    CGContextDrawLinearGradient(ctx, hGrad, CGPointMake(20, 674), CGPointMake(20, 624), 0);
+    CGContextDrawLinearGradient(ctx, hGrad, CGPointMake(18, 576), CGPointMake(18, 530), 0);
     CGGradientRelease(hGrad);
 
-    // Bottom silver separator rule
-    CGContextSetRGBStrokeColor(ctx, 0.40f, 0.44f, 0.52f, 0.8f);
+    // Separator rule under header
+    CGContextSetRGBStrokeColor(ctx, 0.38f, 0.42f, 0.48f, 0.8f);
     CGContextSetLineWidth(ctx, 1.0f);
-    CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(20, 624.5), CGPointMake(980, 624.5)}, 2);
+    CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(18, 530.5), CGPointMake(862, 530.5)}, 2);
 
-    // Left Logo / Branding
+    // Left Logo & Author Branding: "electropiano by mtyas"
     NSDictionary* brandAttrs = @{
-        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:18.0] ?: [NSFont boldSystemFontOfSize:18.0],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.86 blue:0.62 alpha:1.0]
+        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:16.5] ?: [NSFont boldSystemFontOfSize:16.5],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.96 blue:0.98 alpha:1.0]
     };
-    [@"PyPHS" drawAtPoint:NSMakePoint(26.0, 642.0) withAttributes:brandAttrs];
+    [@"electropiano" drawAtPoint:NSMakePoint(24.0, 547.0) withAttributes:brandAttrs];
+
+    NSDictionary* authorAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:10.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.72 blue:0.25 alpha:1.0]
+    };
+    [@"by mtyas" drawAtPoint:NSMakePoint(118.0, 548.0) withAttributes:authorAttrs];
 
     NSDictionary* subBrandAttrs = @{
-        NSFontAttributeName: [NSFont boldSystemFontOfSize:7.5],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.65 alpha:1.0]
+        NSFontAttributeName: [NSFont systemFontOfSize:7.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.60 alpha:1.0]
     };
-    [@"PORT-HAMILTONIAN PHYSICAL MODEL" drawAtPoint:NSMakePoint(26.0, 630.0) withAttributes:subBrandAttrs];
+    [@"PORT-HAMILTONIAN PHYSICAL MODEL" drawAtPoint:NSMakePoint(24.0, 536.0) withAttributes:subBrandAttrs];
 
     // Model Selector Buttons (4 Tactile Rocker Switches)
     const int currentModel = engine_ ? std::clamp(static_cast<int>(std::round(engine_->getParamNormalized(phs::kParamModelType) * 3.0f)), 0, 3) : 0;
-    const char* modelNames[4] = {"RHODES I", "DYNO MK", "WURLI 200", "PHS HYBRID"};
+    const char* modelNames[4] = {"Mk I", "Dyno", "200A", "Hybrid"};
 
     for (int i = 0; i < 4; ++i) {
         const NSRect r = modelButtonRects_[i];
@@ -455,30 +485,30 @@ static void init3dAssets() {
             CGPathRelease(bp);
         }
 
-        // Active Cyan Status LED
+        // Active Amber Status Jewel LED
         if (active) {
-            CGContextSetRGBFillColor(ctx, 0.25f, 0.90f, 1.0f, 1.0f);
-            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 5.0, r.origin.y + 11.5, 5.0, 5.0));
+            CGContextSetRGBFillColor(ctx, 0.95f, 0.72f, 0.20f, 1.0f);
+            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 5.0, r.origin.y + 10.5, 4.5, 4.5));
         }
 
         NSDictionary* bAttrs = @{
-            NSFontAttributeName: [NSFont boldSystemFontOfSize:8.0],
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:8.5],
             NSForegroundColorAttributeName: active ? [NSColor colorWithCalibratedWhite:1.0 alpha:1.0] : [NSColor colorWithCalibratedWhite:0.60 alpha:1.0]
         };
         NSString* name = [NSString stringWithUTF8String:modelNames[i]];
         const NSSize sz = [name sizeWithAttributes:bAttrs];
-        [name drawAtPoint:NSMakePoint(r.origin.x + (r.size.width - sz.width) * 0.5 + (active ? 4.0 : 0.0), r.origin.y + (r.size.height - sz.height) * 0.5) withAttributes:bAttrs];
+        [name drawAtPoint:NSMakePoint(r.origin.x + (r.size.width - sz.width) * 0.5 + (active ? 3.0 : 0.0), r.origin.y + (r.size.height - sz.height) * 0.5) withAttributes:bAttrs];
     }
 
-    // Host Action Buttons: Undo / Redo / MIDI Learn
+    // Action Buttons: Undo / Redo / MIDI Learn / About
     auto drawFlatButton = [&](NSRect r, NSString* label, bool active, bool highlight) {
         CGPathRef p = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 3.0, 3.0, nullptr);
         CGContextAddPath(ctx, p);
         if (highlight) CGContextSetRGBFillColor(ctx, 0.85f, 0.65f, 0.10f, 0.95f);
-        else if (active) CGContextSetRGBFillColor(ctx, 0.20f, 0.23f, 0.28f, 1.0f);
-        else CGContextSetRGBFillColor(ctx, 0.12f, 0.13f, 0.16f, 0.7f);
+        else if (active) CGContextSetRGBFillColor(ctx, 0.18f, 0.21f, 0.26f, 1.0f);
+        else CGContextSetRGBFillColor(ctx, 0.11f, 0.12f, 0.15f, 0.7f);
         CGContextFillPath(ctx);
-        CGContextSetRGBStrokeColor(ctx, 0.35f, 0.38f, 0.45f, 0.7f);
+        CGContextSetRGBStrokeColor(ctx, 0.32f, 0.35f, 0.42f, 0.7f);
         CGContextSetLineWidth(ctx, 1.0f);
         CGContextAddPath(ctx, p);
         CGContextStrokePath(ctx);
@@ -498,25 +528,26 @@ static void init3dAssets() {
 
     drawFlatButton(undoButtonRect_, @"UNDO", canUndo, false);
     drawFlatButton(redoButtonRect_, @"REDO", canRedo, false);
-    drawFlatButton(midiLearnButtonRect_, isLearning ? @"LEARNING" : @"LEARN", true, isLearning);
+    drawFlatButton(midiLearnButtonRect_, isLearning ? @"LEARN*" : @"MIDI", true, isLearning);
 
-    // Preset Stepper & VFD Display
+    // Preset Stepper & Display
     drawFlatButton(presetPrevRect_, @"<", true, false);
     drawFlatButton(presetNextRect_, @" >", true, false);
-    drawFlatButton(presetBrowseButtonRect_, @"BROWSE", true, false);
+    drawFlatButton(presetBrowseButtonRect_, @"PRESETS", true, false);
+    drawFlatButton(aboutButtonRect_, @"ABOUT", true, false);
 
     // VFD Preset Display Window
     CGPathRef vp = CGPathCreateWithRoundedRect(NSRectToCGRect(presetBoxRect_), 3.0, 3.0, nullptr);
     CGContextAddPath(ctx, vp);
-    CGContextSetRGBFillColor(ctx, 0.03f, 0.05f, 0.08f, 1.0f);
+    CGContextSetRGBFillColor(ctx, 0.03f, 0.04f, 0.06f, 1.0f);
     CGContextFillPath(ctx);
-    CGContextSetRGBStrokeColor(ctx, 0.15f, 0.40f, 0.55f, 0.8f);
-    CGContextSetLineWidth(ctx, 1.2f);
+    CGContextSetRGBStrokeColor(ctx, 0.20f, 0.36f, 0.48f, 0.8f);
+    CGContextSetLineWidth(ctx, 1.0f);
     CGContextAddPath(ctx, vp);
     CGContextStrokePath(ctx);
     CGPathRelease(vp);
 
-    NSString* presetName = @"1973 Suitcase Rhodes Mk I";
+    NSString* presetName = @"Suitcase Mk I";
     if (engine_) {
         const auto* curPreset = engine_->getPresetManager().getPreset(engine_->getCurrentPreset());
         if (curPreset) {
@@ -524,7 +555,7 @@ static void init3dAssets() {
         }
     }
     NSDictionary* vfdAttrs = @{
-        NSFontAttributeName: [NSFont fontWithName:@"Courier-Bold" size:10.0] ?: [NSFont boldSystemFontOfSize:10.0],
+        NSFontAttributeName: [NSFont fontWithName:@"Courier-Bold" size:9.5] ?: [NSFont boldSystemFontOfSize:9.5],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.25 green:0.92 blue:1.0 alpha:0.95]
     };
     const NSSize psz = [presetName sizeWithAttributes:vfdAttrs];
@@ -541,111 +572,93 @@ static void init3dAssets() {
     CGContextSaveGState(ctx);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 
-    // 1. Deck Outer Plate: Fine Brushed Satin Aluminum
+    // 1. Deck Outer Plate: Fine Brushed Gunmetal Aluminum
     const CGFloat deckColors[8] = {
-        0.20f, 0.22f, 0.25f, 1.0f,
-        0.13f, 0.14f, 0.16f, 1.0f
+        0.19f, 0.21f, 0.24f, 1.0f,
+        0.12f, 0.13f, 0.15f, 1.0f
     };
     CGGradientRef dGrad = CGGradientCreateWithColorComponents(cs, deckColors, nullptr, 2);
-    CGPathRef dp = CGPathCreateWithRoundedRect(NSRectToCGRect(pianoDeckRect_), 6.0, 6.0, nullptr);
+    CGPathRef dp = CGPathCreateWithRoundedRect(NSRectToCGRect(pianoDeckRect_), 5.0, 5.0, nullptr);
     CGContextSaveGState(ctx);
     CGContextAddPath(ctx, dp);
     CGContextClip(ctx);
     CGContextDrawLinearGradient(ctx, dGrad, CGPointMake(pianoDeckRect_.origin.x, NSMaxY(pianoDeckRect_)), CGPointMake(pianoDeckRect_.origin.x, pianoDeckRect_.origin.y), 0);
     CGGradientRelease(dGrad);
 
-    // Fine horizontal brushing lines
-    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.035f);
+    // Fine brushing lines
+    CGContextSetRGBStrokeColor(ctx, 1.0f, 1.0f, 1.0f, 0.03f);
     CGContextSetLineWidth(ctx, 0.6f);
     for (CGFloat y = pianoDeckRect_.origin.y + 2.0; y < NSMaxY(pianoDeckRect_); y += 3.0) {
         CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(pianoDeckRect_.origin.x + 4.0, y), CGPointMake(NSMaxX(pianoDeckRect_) - 4.0, y)}, 2);
     }
     CGContextRestoreGState(ctx);
 
-    // Deck Bezel & Rim
-    CGContextSetRGBStrokeColor(ctx, 0.45f, 0.48f, 0.55f, 0.85f);
-    CGContextSetLineWidth(ctx, 1.5f);
+    // Deck Bezel Rim
+    CGContextSetRGBStrokeColor(ctx, 0.40f, 0.44f, 0.50f, 0.85f);
+    CGContextSetLineWidth(ctx, 1.2f);
     CGContextAddPath(ctx, dp);
     CGContextStrokePath(ctx);
     CGPathRelease(dp);
 
-    // Corner Allen Screws
+    // Corner Screws
     auto drawScrew = [&](CGFloat sx, CGFloat sy) {
-        CGContextSetRGBFillColor(ctx, 0.30f, 0.32f, 0.36f, 1.0f);
-        CGContextFillEllipseInRect(ctx, CGRectMake(sx - 3.5, sy - 3.5, 7.0, 7.0));
+        CGContextSetRGBFillColor(ctx, 0.28f, 0.30f, 0.34f, 1.0f);
+        CGContextFillEllipseInRect(ctx, CGRectMake(sx - 3.0, sy - 3.0, 6.0, 6.0));
         CGContextSetRGBStrokeColor(ctx, 0.10f, 0.10f, 0.12f, 0.9f);
-        CGContextSetLineWidth(ctx, 1.0f);
-        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(sx - 2.0, sy), CGPointMake(sx + 2.0, sy)}, 2);
+        CGContextSetLineWidth(ctx, 0.8f);
+        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(sx - 1.8, sy), CGPointMake(sx + 1.8, sy)}, 2);
     };
-    drawScrew(pianoDeckRect_.origin.x + 8.0, pianoDeckRect_.origin.y + 8.0);
-    drawScrew(NSMaxX(pianoDeckRect_) - 8.0, pianoDeckRect_.origin.y + 8.0);
-    drawScrew(pianoDeckRect_.origin.x + 8.0, NSMaxY(pianoDeckRect_) - 8.0);
-    drawScrew(NSMaxX(pianoDeckRect_) - 8.0, NSMaxY(pianoDeckRect_) - 8.0);
+    drawScrew(pianoDeckRect_.origin.x + 7.0, pianoDeckRect_.origin.y + 7.0);
+    drawScrew(NSMaxX(pianoDeckRect_) - 7.0, pianoDeckRect_.origin.y + 7.0);
+    drawScrew(pianoDeckRect_.origin.x + 7.0, NSMaxY(pianoDeckRect_) - 7.0);
+    drawScrew(NSMaxX(pianoDeckRect_) - 7.0, NSMaxY(pianoDeckRect_) - 7.0);
 
-    // 2. Deck Header Title Plate
+    // 2. Deck Title
     NSDictionary* dTitleAttrs = @{
-        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:11.0] ?: [NSFont boldSystemFontOfSize:11.0],
+        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:10.5] ?: [NSFont boldSystemFontOfSize:10.5],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.92 green:0.86 blue:0.72 alpha:0.95]
     };
-    [@"PIANO CORE  //  PHYSICAL ACOUSTIC & TRANSDUCER ENGINE" drawAtPoint:NSMakePoint(pianoDeckRect_.origin.x + 20.0, NSMaxY(pianoDeckRect_) - 18.0) withAttributes:dTitleAttrs];
+    [@"PIANO CORE  //  PHYSICAL ACOUSTIC & TRANSDUCER MODELING" drawAtPoint:NSMakePoint(pianoDeckRect_.origin.x + 18.0, NSMaxY(pianoDeckRect_) - 16.0) withAttributes:dTitleAttrs];
 
-    // 3. Sub-Panel 1: TINE & HAMMER MECHANICS (x: 32 .. 568, w: 536)
-    const NSRect mechRect = NSMakeRect(32.0, 376.0, 536.0, 218.0);
-    CGPathRef mp = CGPathCreateWithRoundedRect(NSRectToCGRect(mechRect), 5.0, 5.0, nullptr);
+    // 3. Sub-Panel 1: TINE & HAMMER MECHANICS (x: 26 .. 508, w: 482)
+    const NSRect mechRect = NSMakeRect(26.0, 318.0, 482.0, 182.0);
+    CGPathRef mp = CGPathCreateWithRoundedRect(NSRectToCGRect(mechRect), 4.0, 4.0, nullptr);
     CGContextSaveGState(ctx);
     CGContextAddPath(ctx, mp);
-    CGContextSetRGBFillColor(ctx, 0.10f, 0.11f, 0.13f, 0.85f);
+    CGContextSetRGBFillColor(ctx, 0.09f, 0.10f, 0.12f, 0.85f);
     CGContextFillPath(ctx);
-    CGContextSetRGBStrokeColor(ctx, 0.32f, 0.35f, 0.42f, 0.75f);
+    CGContextSetRGBStrokeColor(ctx, 0.30f, 0.33f, 0.40f, 0.75f);
     CGContextSetLineWidth(ctx, 1.0f);
     CGContextAddPath(ctx, mp);
     CGContextStrokePath(ctx);
     CGPathRelease(mp);
     CGContextRestoreGState(ctx);
 
-    // Sub-Panel 1 Header
     NSDictionary* sp1Attrs = @{
-        NSFontAttributeName: [NSFont boldSystemFontOfSize:9.0],
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:8.5],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.85 green:0.88 blue:0.95 alpha:0.95]
     };
-    [@"TINE & HAMMER MECHANICS" drawAtPoint:NSMakePoint(mechRect.origin.x + 12.0, NSMaxY(mechRect) - 16.0) withAttributes:sp1Attrs];
+    [@"TINE & HAMMER MECHANICS" drawAtPoint:NSMakePoint(mechRect.origin.x + 12.0, NSMaxY(mechRect) - 15.0) withAttributes:sp1Attrs];
 
-    NSDictionary* sp1Sub = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:7.5],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.55 alpha:0.9]
-    };
-    NSString* s1 = @"PORT-HAMILTONIAN CANTILEVER DYNAMICS";
-    const NSSize sz1 = [s1 sizeWithAttributes:sp1Sub];
-    [s1 drawAtPoint:NSMakePoint(NSMaxX(mechRect) - sz1.width - 12.0, NSMaxY(mechRect) - 15.0) withAttributes:sp1Sub];
-
-    // 4. Sub-Panel 2: TRANSDUCER & TONE EQ (x: 580 .. 968, w: 388)
-    const NSRect pickRect = NSMakeRect(580.0, 376.0, 388.0, 218.0);
-    CGPathRef pp = CGPathCreateWithRoundedRect(NSRectToCGRect(pickRect), 5.0, 5.0, nullptr);
+    // 4. Sub-Panel 2: TRANSDUCER & TONE EQ (x: 516 .. 852, w: 336)
+    const NSRect pickRect = NSMakeRect(516.0, 318.0, 336.0, 182.0);
+    CGPathRef pp = CGPathCreateWithRoundedRect(NSRectToCGRect(pickRect), 4.0, 4.0, nullptr);
     CGContextSaveGState(ctx);
     CGContextAddPath(ctx, pp);
-    CGContextSetRGBFillColor(ctx, 0.12f, 0.11f, 0.10f, 0.85f);
+    CGContextSetRGBFillColor(ctx, 0.11f, 0.10f, 0.09f, 0.85f);
     CGContextFillPath(ctx);
-    CGContextSetRGBStrokeColor(ctx, 0.48f, 0.42f, 0.32f, 0.75f);
+    CGContextSetRGBStrokeColor(ctx, 0.44f, 0.38f, 0.28f, 0.75f);
     CGContextSetLineWidth(ctx, 1.0f);
     CGContextAddPath(ctx, pp);
     CGContextStrokePath(ctx);
     CGPathRelease(pp);
     CGContextRestoreGState(ctx);
 
-    // Sub-Panel 2 Header
     NSDictionary* sp2Attrs = @{
-        NSFontAttributeName: [NSFont boldSystemFontOfSize:9.0],
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:8.5],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.86 blue:0.70 alpha:0.95]
     };
-    [@"TRANSDUCER & TONE EQ" drawAtPoint:NSMakePoint(pickRect.origin.x + 12.0, NSMaxY(pickRect) - 16.0) withAttributes:sp2Attrs];
-
-    NSDictionary* sp2Sub = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:7.5],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.55 alpha:0.9]
-    };
-    NSString* s2 = @"MAGNETIC FLUX & RLC VOICING";
-    const NSSize sz2 = [s2 sizeWithAttributes:sp2Sub];
-    [s2 drawAtPoint:NSMakePoint(NSMaxX(pickRect) - sz2.width - 12.0, NSMaxY(pickRect) - 15.0) withAttributes:sp2Sub];
+    [@"TRANSDUCER & TONE EQ" drawAtPoint:NSMakePoint(pickRect.origin.x + 12.0, NSMaxY(pickRect) - 15.0) withAttributes:sp2Attrs];
 
     CGColorSpaceRelease(cs);
     CGContextRestoreGState(ctx);
@@ -664,7 +677,7 @@ static void init3dAssets() {
         0.05f, 0.06f, 0.07f, 1.0f
     };
     CGGradientRef fGrad = CGGradientCreateWithColorComponents(cs, fxColors, nullptr, 2);
-    CGPathRef fp = CGPathCreateWithRoundedRect(NSRectToCGRect(fxDeckRect_), 6.0, 6.0, nullptr);
+    CGPathRef fp = CGPathCreateWithRoundedRect(NSRectToCGRect(fxDeckRect_), 5.0, 5.0, nullptr);
     CGContextSaveGState(ctx);
     CGContextAddPath(ctx, fp);
     CGContextClip(ctx);
@@ -673,34 +686,34 @@ static void init3dAssets() {
     CGContextRestoreGState(ctx);
 
     // Chassis Bezel
-    CGContextSetRGBStrokeColor(ctx, 0.28f, 0.30f, 0.35f, 0.9f);
-    CGContextSetLineWidth(ctx, 1.5f);
+    CGContextSetRGBStrokeColor(ctx, 0.26f, 0.28f, 0.33f, 0.9f);
+    CGContextSetLineWidth(ctx, 1.2f);
     CGContextAddPath(ctx, fp);
     CGContextStrokePath(ctx);
     CGPathRelease(fp);
 
-    // Header Title Plate
+    // Header Title
     NSDictionary* fxTitleAttrs = @{
-        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:11.0] ?: [NSFont boldSystemFontOfSize:11.0],
+        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:10.5] ?: [NSFont boldSystemFontOfSize:10.5],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.75 green:0.85 blue:0.95 alpha:0.95]
     };
-    [@"VINTAGE EFFECTS RACK  //  BOUTIQUE ANALOG STOMPBOX & STUDIO PROCESSING" drawAtPoint:NSMakePoint(fxDeckRect_.origin.x + 20.0, NSMaxY(fxDeckRect_) - 18.0) withAttributes:fxTitleAttrs];
+    [@"VINTAGE EFFECTS RACK  //  BOUTIQUE ANALOG STOMPBOX & STUDIO PROCESSING" drawAtPoint:NSMakePoint(fxDeckRect_.origin.x + 18.0, NSMaxY(fxDeckRect_) - 16.0) withAttributes:fxTitleAttrs];
 
     // Helper: Draw FX Module Enclosure
     auto drawModuleBox = [&](NSRect r, const char* title, const char* sub, NSColor* accent, NSColor* ledColor) {
         CGPathRef bp = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
         CGContextSaveGState(ctx);
         CGContextAddPath(ctx, bp);
-        CGContextSetRGBFillColor(ctx, 0.08f, 0.09f, 0.11f, 0.92f);
+        CGContextSetRGBFillColor(ctx, 0.07f, 0.08f, 0.10f, 0.92f);
         CGContextFillPath(ctx);
 
         // Accent top border line
         CGContextSetStrokeColorWithColor(ctx, [accent CGColor]);
         CGContextSetLineWidth(ctx, 1.8f);
-        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(r.origin.x + 4.0, NSMaxY(r) - 1.0), CGPointMake(NSMaxX(r) - 4.0, NSMaxY(r) - 1.0)}, 2);
+        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(r.origin.x + 3.0, NSMaxY(r) - 1.0), CGPointMake(NSMaxX(r) - 3.0, NSMaxY(r) - 1.0)}, 2);
 
         // Subtle outer border
-        CGContextSetRGBStrokeColor(ctx, 0.24f, 0.26f, 0.30f, 0.75f);
+        CGContextSetRGBStrokeColor(ctx, 0.22f, 0.24f, 0.28f, 0.75f);
         CGContextSetLineWidth(ctx, 1.0f);
         CGContextAddPath(ctx, bp);
         CGContextStrokePath(ctx);
@@ -710,132 +723,127 @@ static void init3dAssets() {
         // Status Jewel LED
         if (ledColor) {
             CGContextSetFillColorWithColor(ctx, [ledColor CGColor]);
-            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 8.0, NSMaxY(r) - 16.0, 6.0, 6.0));
+            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 6.0, NSMaxY(r) - 15.0, 5.0, 5.0));
         }
 
         // Header Title
         NSDictionary* tAttrs = @{
-            NSFontAttributeName: [NSFont boldSystemFontOfSize:8.5],
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:8.0],
             NSForegroundColorAttributeName: accent
         };
         NSString* tStr = [NSString stringWithUTF8String:title];
-        [tStr drawAtPoint:NSMakePoint(r.origin.x + 18.0, NSMaxY(r) - 18.0) withAttributes:tAttrs];
+        [tStr drawAtPoint:NSMakePoint(r.origin.x + 15.0, NSMaxY(r) - 16.0) withAttributes:tAttrs];
 
         // Subtitle
         NSDictionary* sAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:7.0],
-            NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.50 alpha:0.9]
+            NSFontAttributeName: [NSFont systemFontOfSize:6.5],
+            NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.48 alpha:0.9]
         };
         NSString* sStr = [NSString stringWithUTF8String:sub];
-        [sStr drawAtPoint:NSMakePoint(r.origin.x + 18.0, NSMaxY(r) - 27.0) withAttributes:sAttrs];
+        [sStr drawAtPoint:NSMakePoint(r.origin.x + 15.0, NSMaxY(r) - 25.0) withAttributes:sAttrs];
     };
 
-    // 1. Preamp Overdrive
-    drawModuleBox(NSMakeRect(32.0, 126.0, 160.0, 204.0), "OVERDRIVE", "TUBE / JFET",
+    // 1. Preamp Drive (x: 26 .. 134, w: 108)
+    drawModuleBox(NSMakeRect(26.0, 108.0, 108.0, 172.0), "PREAMP", "TUBE / JFET",
                   [NSColor colorWithCalibratedRed:0.95 green:0.72 blue:0.25 alpha:1.0],
                   [NSColor colorWithCalibratedRed:1.00 green:0.60 blue:0.10 alpha:1.0]);
 
-    // 2. Suitcase Tremolo
-    drawModuleBox(NSMakeRect(200.0, 126.0, 184.0, 204.0), "TREMOLO", "SUITCASE PAN",
+    // 2. Suitcase Tremolo (x: 140 .. 308, w: 168)
+    drawModuleBox(NSMakeRect(140.0, 108.0, 168.0, 172.0), "TREMOLO", "SUITCASE PAN",
                   [NSColor colorWithCalibratedRed:0.25 green:0.85 blue:0.65 alpha:1.0],
                   [NSColor colorWithCalibratedRed:0.20 green:0.95 blue:0.60 alpha:1.0]);
 
-    // 3. Analog Modulation (Phaser & Chorus)
-    drawModuleBox(NSMakeRect(392.0, 126.0, 276.0, 204.0), "MODULATION", "PHASER & CHORUS",
+    // 3. Analog Modulation (x: 314 .. 558, w: 244)
+    drawModuleBox(NSMakeRect(314.0, 108.0, 244.0, 172.0), "MODULATION", "PHASER & CHORUS",
                   [NSColor colorWithCalibratedRed:0.65 green:0.55 blue:0.95 alpha:1.0],
                   [NSColor colorWithCalibratedRed:0.70 green:0.50 blue:1.00 alpha:1.0]);
 
-    // 4. Studio Reverb
-    drawModuleBox(NSMakeRect(676.0, 126.0, 184.0, 204.0), "REVERB", "SPRING & PLATE",
+    // 4. Studio Reverb (x: 564 .. 732, w: 168)
+    drawModuleBox(NSMakeRect(564.0, 108.0, 168.0, 172.0), "REVERB", "SPRING & ROOM",
                   [NSColor colorWithCalibratedRed:0.35 green:0.75 blue:1.00 alpha:1.0],
-                  [NSColor colorWithCalibratedRed:0.25 green:0.70 blue:1.00 alpha:1.0]);
+                  [NSColor colorWithCalibratedRed:0.30 green:0.80 blue:1.00 alpha:1.0]);
 
-    // 5. Master Output
-    drawModuleBox(NSMakeRect(868.0, 126.0, 100.0, 204.0), "MASTER", "MAIN OUT",
-                  [NSColor colorWithCalibratedWhite:0.90 alpha:1.0],
-                  [NSColor colorWithCalibratedRed:0.30 green:0.85 blue:0.40 alpha:1.0]);
+    // 5. Master Output (x: 738 .. 854, w: 116)
+    drawModuleBox(NSMakeRect(738.0, 108.0, 116.0, 172.0), "OUTPUT", "MASTER GAIN",
+                  [NSColor colorWithCalibratedRed:0.85 green:0.88 blue:0.92 alpha:1.0],
+                  [NSColor colorWithCalibratedRed:0.50 green:0.85 blue:0.60 alpha:1.0]);
 
     CGColorSpaceRelease(cs);
     CGContextRestoreGState(ctx);
 }
 
 // =============================================================================
-// 4. DRAW ALL 3D KNOBS
+// 4. DRAW ALL KNOBS WITH SHORT LABELS & 3D FILMSTRIPS
 // =============================================================================
 - (void)drawAllKnobs:(CGContextRef)ctx {
-    const int32_t learningParam = engine_ ? engine_->getLearningParamId() : -1;
-
     for (size_t i = 0; i < knobs_.size(); ++i) {
         const auto& k = knobs_[i];
-        const float norm = engine_ ? engine_->getParamNormalized(k.paramId) : phs::kParamMetadata[k.paramId].defaultValue;
-        const int8_t cc = engine_ ? engine_->getParamCc(k.paramId) : -1;
-        const bool isArmed = (learningParam == static_cast<int32_t>(k.paramId));
+        const float norm = engine_ ? engine_->getParamNormalized(k.paramId) : 0.5f;
+        const int8_t midiCc = engine_ ? engine_->getParamCc(k.paramId) : -1;
+        const bool isArmed = engine_ ? (engine_->getLearningParamId() == static_cast<int32_t>(k.paramId)) : false;
 
-        [self drawSingle3dKnob:ctx
-                          rect:k.rect
-                         param:k.paramId
-                         line1:[NSString stringWithUTF8String:k.line1]
-                         line2:[NSString stringWithUTF8String:k.line2]
-                         value:norm
-                        midiCc:cc
-                       isArmed:isArmed
-                         style:k.style];
+        [self drawKnobCell:ctx
+                  paramId:k.paramId
+                     rect:k.rect
+                    label:k.label
+                    style:k.style
+                     norm:norm
+                   midiCc:midiCc
+                  isArmed:isArmed];
     }
 }
 
-- (void)drawSingle3dKnob:(CGContextRef)ctx
-                    rect:(NSRect)rect
-                   param:(uint32_t)paramId
-                   line1:(NSString*)line1
-                   line2:(NSString*)line2
-                   value:(float)norm
-                  midiCc:(int8_t)midiCc
-                 isArmed:(bool)isArmed
-                   style:(KnobStyle)style {
-    const CGFloat cx = rect.origin.x + rect.size.width * 0.5;
-    const CGFloat cy = rect.origin.y + 40.0;
-    const CGFloat radius = 20.0;
-
+- (void)drawKnobCell:(CGContextRef)ctx
+             paramId:(uint32_t)paramId
+                rect:(NSRect)rect
+               label:(const char*)label
+               style:(KnobStyle)style
+                norm:(float)norm
+              midiCc:(int8_t)midiCc
+             isArmed:(bool)isArmed {
     CGContextSaveGState(ctx);
 
-    // 1. Two-Line Centered Parameter Label (Above Knob, y: rect.origin.y + 64 .. 86)
+    const CGFloat cx = rect.origin.x + rect.size.width * 0.5;
+    const CGFloat cy = rect.origin.y + 35.0;
+    const CGFloat radius = 20.0;
+
+    // 1. Single-Line Short Parameter Label (Above Knob, y: rect.origin.y + 58)
     NSMutableParagraphStyle* pStyle = [[[NSMutableParagraphStyle alloc] init] autorelease];
     [pStyle setAlignment:NSTextAlignmentCenter];
-    [pStyle setLineSpacing:1.0];
     NSDictionary* titleAttrs = @{
         NSFontAttributeName: [NSFont boldSystemFontOfSize:8.2],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.86 alpha:1.0],
         NSParagraphStyleAttributeName: pStyle
     };
-    NSString* fullTitle = [NSString stringWithFormat:@"%@\n%@", line1, line2];
-    NSRect labelRect = NSMakeRect(rect.origin.x - 4.0, rect.origin.y + 64.0, rect.size.width + 8.0, 22.0);
+    NSString* fullTitle = [NSString stringWithUTF8String:label];
+    NSRect labelRect = NSMakeRect(rect.origin.x - 6.0, rect.origin.y + 58.0, rect.size.width + 12.0, 14.0);
     [fullTitle drawInRect:labelRect withAttributes:titleAttrs];
 
-    // 2. Glowing Halo Arc Indicator (270° sweep, from 225° to -45°)
+    // 2. Halo Arc Indicator (270° sweep, from 225° to -45°)
     const CGFloat startAngle = 225.0f * (M_PI / 180.0f);
     const CGFloat endAngle   = -45.0f * (M_PI / 180.0f);
     const CGFloat curAngle   = startAngle - norm * (startAngle - endAngle);
 
     // Dark Track Arc
-    CGContextSetRGBStrokeColor(ctx, 0.15f, 0.17f, 0.20f, 0.9f);
-    CGContextSetLineWidth(ctx, 3.0f);
-    CGContextAddArc(ctx, cx, cy, radius + 4.5, endAngle, startAngle, 0);
+    CGContextSetRGBStrokeColor(ctx, 0.14f, 0.16f, 0.19f, 0.9f);
+    CGContextSetLineWidth(ctx, 2.8f);
+    CGContextAddArc(ctx, cx, cy, radius + 3.8, endAngle, startAngle, 0);
     CGContextStrokePath(ctx);
 
-    // Section-specific glowing arc color
+    // Glowing Arc by Style
     if (isArmed) {
         CGContextSetRGBStrokeColor(ctx, 1.0f, 0.85f, 0.20f, 1.0f);
     } else {
         switch (style) {
-            case KnobStyle::Mechanics:   CGContextSetRGBStrokeColor(ctx, 0.95f, 0.76f, 0.32f, 0.95f); break; // Warm amber gold
+            case KnobStyle::Mechanics:   CGContextSetRGBStrokeColor(ctx, 0.95f, 0.76f, 0.32f, 0.95f); break; // Amber gold
             case KnobStyle::Pickup:      CGContextSetRGBStrokeColor(ctx, 0.82f, 0.88f, 0.98f, 0.95f); break; // Champagne silver
-            case KnobStyle::Drive:       CGContextSetRGBStrokeColor(ctx, 1.00f, 0.55f, 0.15f, 1.00f); break; // Fiery ember drive
+            case KnobStyle::Drive:       CGContextSetRGBStrokeColor(ctx, 1.00f, 0.55f, 0.15f, 1.00f); break; // Ember drive
             case KnobStyle::Modulation:  CGContextSetRGBStrokeColor(ctx, 0.25f, 0.90f, 0.95f, 0.95f); break; // Electric cyan
-            case KnobStyle::Reverb:      CGContextSetRGBStrokeColor(ctx, 0.40f, 0.80f, 1.00f, 0.95f); break; // Sky blue ambience
+            case KnobStyle::Reverb:      CGContextSetRGBStrokeColor(ctx, 0.40f, 0.80f, 1.00f, 0.95f); break; // Sky blue
         }
     }
-    CGContextSetLineWidth(ctx, 3.2f);
-    CGContextAddArc(ctx, cx, cy, radius + 4.5, curAngle, startAngle, 0);
+    CGContextSetLineWidth(ctx, 2.8f);
+    CGContextAddArc(ctx, cx, cy, radius + 3.8, curAngle, startAngle, 0);
     CGContextStrokePath(ctx);
 
     // 3. Render 3D Blender Raytraced Knob Body
@@ -856,7 +864,7 @@ static void init3dAssets() {
         const int frameIdx = std::clamp(static_cast<int>(std::round(norm * 63.0f)), 0, 63);
         const CGFloat srcY = totalH - (frameIdx + 1) * frameH;
         const NSRect srcRect = NSMakeRect(0, srcY, frameW, frameH);
-        const CGFloat knobSize = 44.0;
+        const CGFloat knobSize = 40.0;
         const NSRect knobDest = NSMakeRect(cx - knobSize * 0.5, cy - knobSize * 0.5, knobSize, knobSize);
         [knobImg drawInRect:knobDest fromRect:srcRect operation:NSCompositingOperationSourceOver fraction:1.0];
     } else {
@@ -868,38 +876,38 @@ static void init3dAssets() {
         CGContextStrokeEllipseInRect(ctx, CGRectMake(cx - radius, cy - radius, radius * 2.0, radius * 2.0));
     }
 
-    // 4. Parameter Value Display Pill (Below Knob, y: rect.origin.y + 3 .. 17)
+    // 4. Parameter Value Pill (Below Knob, y: rect.origin.y + 2)
     NSString* valStr = formatParamValue(paramId, norm);
     NSDictionary* valAttrs = @{
-        NSFontAttributeName: [NSFont boldSystemFontOfSize:8.0],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.35 green:0.90 blue:1.0 alpha:1.0]
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:7.5],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.75 blue:0.30 alpha:1.0]
     };
     const NSSize vSz = [valStr sizeWithAttributes:valAttrs];
-    const NSRect pillRect = NSMakeRect(cx - (vSz.width + 10.0) * 0.5, rect.origin.y + 3.0, vSz.width + 10.0, 14.0);
+    const NSRect pillRect = NSMakeRect(cx - (vSz.width + 8.0) * 0.5, rect.origin.y + 1.0, vSz.width + 8.0, 13.0);
     CGContextSetRGBFillColor(ctx, 0.04f, 0.05f, 0.07f, 0.92f);
     CGPathRef pillP = CGPathCreateWithRoundedRect(NSRectToCGRect(pillRect), 3.0, 3.0, nullptr);
     CGContextAddPath(ctx, pillP);
     CGContextFillPath(ctx);
     CGPathRelease(pillP);
 
-    [valStr drawAtPoint:NSMakePoint(cx - vSz.width * 0.5, rect.origin.y + 3.0) withAttributes:valAttrs];
+    [valStr drawAtPoint:NSMakePoint(cx - vSz.width * 0.5, rect.origin.y + 1.5) withAttributes:valAttrs];
 
-    // 5. MIDI CC Badge (if learned or armed)
+    // 5. MIDI CC Badge
     if (isArmed) {
-        NSRect bRect = NSMakeRect(cx - 18.0, cy - 7.0, 36.0, 14.0);
+        NSRect bRect = NSMakeRect(cx - 16.0, cy - 6.0, 32.0, 12.0);
         CGContextSetRGBFillColor(ctx, 0.95f, 0.75f, 0.10f, 0.95f);
-        CGPathRef bp = CGPathCreateWithRoundedRect(NSRectToCGRect(bRect), 3.0, 3.0, nullptr);
+        CGPathRef bp = CGPathCreateWithRoundedRect(NSRectToCGRect(bRect), 2.5, 2.5, nullptr);
         CGContextAddPath(ctx, bp);
         CGContextFillPath(ctx);
         CGPathRelease(bp);
 
         NSDictionary* bAttrs = @{
-            NSFontAttributeName: [NSFont boldSystemFontOfSize:8.0],
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:7.5],
             NSForegroundColorAttributeName: [NSColor blackColor]
         };
-        [@"LEARN" drawAtPoint:NSMakePoint(cx - 14.0, cy - 6.0) withAttributes:bAttrs];
+        [@"LEARN" drawAtPoint:NSMakePoint(cx - 13.0, cy - 5.5) withAttributes:bAttrs];
     } else if (midiCc >= 0) {
-        NSRect bRect = NSMakeRect(rect.origin.x + 2.0, rect.origin.y + 50.0, 26.0, 11.0);
+        NSRect bRect = NSMakeRect(rect.origin.x + 2.0, rect.origin.y + 44.0, 24.0, 10.0);
         CGContextSetRGBFillColor(ctx, 0.10f, 0.18f, 0.28f, 0.9f);
         CGPathRef bp = CGPathCreateWithRoundedRect(NSRectToCGRect(bRect), 2.0, 2.0, nullptr);
         CGContextAddPath(ctx, bp);
@@ -907,7 +915,7 @@ static void init3dAssets() {
         CGPathRelease(bp);
 
         NSDictionary* ccAttrs = @{
-            NSFontAttributeName: [NSFont boldSystemFontOfSize:6.5],
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:6.0],
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.40 green:0.80 blue:1.0 alpha:0.9]
         };
         NSString* ccStr = [NSString stringWithFormat:@"CC%d", midiCc];
@@ -924,19 +932,19 @@ static void init3dAssets() {
     CGContextSaveGState(ctx);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 
-    // 1. Iconic Crimson Red Felt Rail (Rhodes Harp Rail, y: 104..110)
+    // 1. Crimson Red Felt Rail (Harp Rail, y: 92..96)
     const CGFloat feltColors[8] = {
         0.78f, 0.08f, 0.12f, 1.0f,
         0.42f, 0.04f, 0.06f, 1.0f
     };
     CGGradientRef fGrad = CGGradientCreateWithColorComponents(cs, feltColors, nullptr, 2);
-    CGContextDrawLinearGradient(ctx, fGrad, CGPointMake(0, 110), CGPointMake(0, 104), 0);
+    CGContextDrawLinearGradient(ctx, fGrad, CGPointMake(0, 96), CGPointMake(0, 92), 0);
     CGGradientRelease(fGrad);
 
     // Felt trim line
     CGContextSetRGBStrokeColor(ctx, 0.90f, 0.20f, 0.25f, 0.8f);
     CGContextSetLineWidth(ctx, 0.8f);
-    CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(18, 110.5), CGPointMake(982, 110.5)}, 2);
+    CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(18, 96.5), CGPointMake(862, 96.5)}, 2);
 
     // 2. Sustain Pedal Stomp Switch
     const bool isSustained = engine_ ? engine_->isSustainActive() : false;
@@ -952,19 +960,18 @@ static void init3dAssets() {
     CGPathRelease(pedP);
 
     NSDictionary* pedAttrs = @{
-        NSFontAttributeName: [NSFont boldSystemFontOfSize:8.0],
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:7.5],
         NSForegroundColorAttributeName: isSustained ? [NSColor colorWithCalibratedRed:0.4 green:1.0 blue:0.5 alpha:1.0] : [NSColor colorWithCalibratedWhite:0.65 alpha:1.0]
     };
-    [@"SUSTAIN" drawAtPoint:NSMakePoint(pedalSwitchRect_.origin.x + 8.0, pedalSwitchRect_.origin.y + 50.0) withAttributes:pedAttrs];
-    [@"PEDAL" drawAtPoint:NSMakePoint(pedalSwitchRect_.origin.x + 12.0, pedalSwitchRect_.origin.y + 36.0) withAttributes:pedAttrs];
+    [@"SUSTAIN" drawAtPoint:NSMakePoint(pedalSwitchRect_.origin.x + 5.0, pedalSwitchRect_.origin.y + 44.0) withAttributes:pedAttrs];
+    [@"PEDAL" drawAtPoint:NSMakePoint(pedalSwitchRect_.origin.x + 8.0, pedalSwitchRect_.origin.y + 32.0) withAttributes:pedAttrs];
 
-    // Jewel status on pedal
+    // Status jewel
     CGContextSetRGBFillColor(ctx, isSustained ? 0.3f : 0.2f, isSustained ? 1.0f : 0.3f, isSustained ? 0.4f : 0.3f, 1.0f);
-    CGContextFillEllipseInRect(ctx, CGRectMake(pedalSwitchRect_.origin.x + 25.0, pedalSwitchRect_.origin.y + 14.0, 8.0, 8.0));
+    CGContextFillEllipseInRect(ctx, CGRectMake(pedalSwitchRect_.origin.x + 20.0, pedalSwitchRect_.origin.y + 12.0, 7.0, 7.0));
 
     // 3. Pitch Bend and Modulation Wheels
     auto drawWheel = [&](NSRect r, const char* label, float norm) {
-        // Well recess
         CGPathRef wp = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 3.0, 3.0, nullptr);
         CGContextAddPath(ctx, wp);
         CGContextSetRGBFillColor(ctx, 0.05f, 0.06f, 0.07f, 1.0f);
@@ -975,15 +982,13 @@ static void init3dAssets() {
         CGContextStrokePath(ctx);
         CGPathRelease(wp);
 
-        // Center track
         const CGFloat midX = r.origin.x + r.size.width * 0.5;
         CGContextSetRGBStrokeColor(ctx, 0.12f, 0.14f, 0.18f, 1.0f);
-        CGContextSetLineWidth(ctx, 3.0f);
-        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(midX, r.origin.y + 8.0), CGPointMake(midX, NSMaxY(r) - 8.0)}, 2);
+        CGContextSetLineWidth(ctx, 2.5f);
+        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(midX, r.origin.y + 6.0), CGPointMake(midX, NSMaxY(r) - 6.0)}, 2);
 
-        // 3D Slider Cap
-        const CGFloat capH = 24.0;
-        const CGFloat capY = r.origin.y + 4.0 + norm * (r.size.height - 8.0 - capH);
+        const CGFloat capH = 20.0;
+        const CGFloat capY = r.origin.y + 3.0 + norm * (r.size.height - 6.0 - capH);
         const NSRect capDest = NSMakeRect(r.origin.x + 2.0, capY, r.size.width - 4.0, capH);
 
         if (gSliderCap) {
@@ -994,7 +999,7 @@ static void init3dAssets() {
         }
 
         NSDictionary* la = @{
-            NSFontAttributeName: [NSFont boldSystemFontOfSize:6.5],
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:6.0],
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.60 alpha:1.0]
         };
         NSString* lStr = [NSString stringWithUTF8String:label];
@@ -1004,7 +1009,7 @@ static void init3dAssets() {
     drawWheel(pitchBendRect_, "PITCH", 0.5f);
     drawWheel(modWheelRect_,  "MOD",   0.0f);
 
-    // 4. Playable 61-Key Keyboard (C2 to C7, 36 Naturals, 25 Sharps)
+    // 4. Playable Keyboard (C2 to C7, 36 Naturals, 25 Sharps)
     const int startNote = 36; // C2
     const int numNaturals = 36;
     const CGFloat naturalW = keyboardRect_.size.width / static_cast<CGFloat>(numNaturals);
@@ -1094,10 +1099,10 @@ static void init3dAssets() {
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 
     // Dim background
-    CGContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 0.70f);
-    CGContextFillRect(ctx, CGRectMake(0, 0, 1000, 680));
+    CGContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 0.72f);
+    CGContextFillRect(ctx, CGRectMake(0, 0, phs::kEditorWidth, phs::kEditorHeight));
 
-    browserModalRect_ = NSMakeRect(200.0, 140.0, 600.0, 420.0);
+    browserModalRect_ = NSMakeRect(140.0, 70.0, 600.0, 440.0);
     CGPathRef mp = CGPathCreateWithRoundedRect(NSRectToCGRect(browserModalRect_), 6.0, 6.0, nullptr);
     CGContextAddPath(ctx, mp);
     CGContextSetRGBFillColor(ctx, 0.10f, 0.11f, 0.13f, 0.98f);
@@ -1113,7 +1118,7 @@ static void init3dAssets() {
         NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:14.0] ?: [NSFont boldSystemFontOfSize:14.0],
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.86 blue:0.62 alpha:1.0]
     };
-    [@"PyPHS Preset Library" drawAtPoint:NSMakePoint(browserModalRect_.origin.x + 20.0, NSMaxY(browserModalRect_) - 28.0) withAttributes:tAttrs];
+    [@"electropiano Preset Library" drawAtPoint:NSMakePoint(browserModalRect_.origin.x + 20.0, NSMaxY(browserModalRect_) - 28.0) withAttributes:tAttrs];
 
     // Close Button [X]
     browserCloseRect_ = NSMakeRect(NSMaxX(browserModalRect_) - 32.0, NSMaxY(browserModalRect_) - 30.0, 22.0, 22.0);
@@ -1148,7 +1153,7 @@ static void init3dAssets() {
     }
 
     // Preset List Box
-    const NSRect listRect = NSMakeRect(browserModalRect_.origin.x + 20.0, browserModalRect_.origin.y + 48.0, browserModalRect_.size.width - 40.0, 270.0);
+    const NSRect listRect = NSMakeRect(browserModalRect_.origin.x + 20.0, browserModalRect_.origin.y + 48.0, browserModalRect_.size.width - 40.0, 290.0);
     CGContextSetRGBFillColor(ctx, 0.05f, 0.06f, 0.08f, 1.0f);
     CGContextFillRect(ctx, listRect);
     CGContextSetRGBStrokeColor(ctx, 0.20f, 0.22f, 0.26f, 1.0f);
@@ -1210,12 +1215,191 @@ static void init3dAssets() {
 }
 
 // =============================================================================
+// 7. ABOUT MODAL (INFO, CREDITS, WEBSITE & KO-FI DONATIONS)
+// =============================================================================
+- (void)drawAboutModal:(CGContextRef)ctx {
+    CGContextSaveGState(ctx);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+
+    // Dim background
+    CGContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 0.75f);
+    CGContextFillRect(ctx, CGRectMake(0, 0, phs::kEditorWidth, phs::kEditorHeight));
+
+    aboutModalRect_ = NSMakeRect(170.0, 50.0, 540.0, 480.0);
+    CGPathRef mp = CGPathCreateWithRoundedRect(NSRectToCGRect(aboutModalRect_), 8.0, 8.0, nullptr);
+    CGContextAddPath(ctx, mp);
+    CGContextSetRGBFillColor(ctx, 0.09f, 0.10f, 0.12f, 0.98f);
+    CGContextFillPath(ctx);
+    CGContextSetRGBStrokeColor(ctx, 0.85f, 0.68f, 0.32f, 0.90f);
+    CGContextSetLineWidth(ctx, 1.5f);
+    CGContextAddPath(ctx, mp);
+    CGContextStrokePath(ctx);
+    CGPathRelease(mp);
+
+    // Modal Header Title Bar
+    NSRect headerBar = NSMakeRect(aboutModalRect_.origin.x, NSMaxY(aboutModalRect_) - 48.0, aboutModalRect_.size.width, 48.0);
+    CGPathRef hp = CGPathCreateWithRoundedRect(NSRectToCGRect(headerBar), 8.0, 8.0, nullptr);
+    CGContextSaveGState(ctx);
+    CGContextAddPath(ctx, hp);
+    CGContextClip(ctx);
+    const CGFloat hCols[8] = {0.18f, 0.19f, 0.22f, 1.0f, 0.11f, 0.12f, 0.14f, 1.0f};
+    CGGradientRef hGrad = CGGradientCreateWithColorComponents(cs, hCols, nullptr, 2);
+    CGContextDrawLinearGradient(ctx, hGrad, CGPointMake(0, NSMaxY(headerBar)), CGPointMake(0, headerBar.origin.y), 0);
+    CGGradientRelease(hGrad);
+    CGContextRestoreGState(ctx);
+    CGPathRelease(hp);
+
+    // Separator line under header
+    CGContextSetRGBStrokeColor(ctx, 0.35f, 0.38f, 0.44f, 0.8f);
+    CGContextSetLineWidth(ctx, 1.0f);
+    CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(aboutModalRect_.origin.x, NSMaxY(aboutModalRect_) - 48.0),
+                                                 CGPointMake(NSMaxX(aboutModalRect_), NSMaxY(aboutModalRect_) - 48.0)}, 2);
+
+    // Title: electropiano
+    NSDictionary* tAttrs = @{
+        NSFontAttributeName: [NSFont fontWithName:@"Optima-Bold" size:20.0] ?: [NSFont boldSystemFontOfSize:20.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.96 green:0.88 blue:0.68 alpha:1.0]
+    };
+    [@"electropiano" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 22.0, NSMaxY(aboutModalRect_) - 36.0) withAttributes:tAttrs];
+
+    NSDictionary* subAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:11.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.95 green:0.72 blue:0.25 alpha:1.0]
+    };
+    [@"by mtyas" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 148.0, NSMaxY(aboutModalRect_) - 33.0) withAttributes:subAttrs];
+
+    // Version Tag
+    NSDictionary* verAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:9.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.65 alpha:1.0]
+    };
+    [@"v1.2.0 • Port-Hamiltonian Synthesizer" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 215.0, NSMaxY(aboutModalRect_) - 32.0) withAttributes:verAttrs];
+
+    // Close Button [ X ]
+    aboutCloseRect_ = NSMakeRect(NSMaxX(aboutModalRect_) - 36.0, NSMaxY(aboutModalRect_) - 36.0, 24.0, 24.0);
+    CGContextSetRGBFillColor(ctx, 0.22f, 0.24f, 0.28f, 1.0f);
+    CGContextFillRect(ctx, aboutCloseRect_);
+    NSDictionary* xAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:12.0],
+        NSForegroundColorAttributeName: [NSColor whiteColor]
+    };
+    [@"X" drawAtPoint:NSMakePoint(aboutCloseRect_.origin.x + 7.0, aboutCloseRect_.origin.y + 4.0) withAttributes:xAttrs];
+
+    // About Information Body
+    NSDictionary* bodyHeadAttrs = @{
+        NSFontAttributeName: [NSFont boldSystemFontOfSize:11.5],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.90 green:0.92 blue:0.96 alpha:1.0]
+    };
+    NSDictionary* bodyTextAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:10.0],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.78 alpha:1.0]
+    };
+
+    CGFloat curY = NSMaxY(aboutModalRect_) - 74.0;
+    [@"Physical Modeling Port-Hamiltonian Electric Piano" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 24.0, curY) withAttributes:bodyHeadAttrs];
+
+    curY -= 20.0;
+    NSString* desc1 = @"electropiano is an open-source, multiplatform physical modeling instrument based on\nport-Hamiltonian systems (PHS) research from the PyPHS project. It simulates Rhodes Mk I,\nDyno-My-Piano, and Wurlitzer 200A electro-mechanical pianos from fundamental physics.";
+    [desc1 drawInRect:NSMakeRect(aboutModalRect_.origin.x + 24.0, curY - 34.0, 492.0, 50.0) withAttributes:bodyTextAttrs];
+
+    curY -= 56.0;
+    [@"Physics & Sound Engine Highlights:" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 24.0, curY) withAttributes:bodyHeadAttrs];
+
+    curY -= 18.0;
+    NSString* desc2 = @"• Port-Hamiltonian Cantilever Beam & Resonant Tone-Bar Modal Integrator\n• Hertzian Non-Linear Hammer Impact with Hunt-Crossley Felt Dissipation\n• Non-linear Magnetic Flux & Electrostatic Capacitive Transducer Sensitivity\n• Vintage Suitcase Auto-Pan, 4-Stage Phaser, BBD Chorus, JFET Preamp & Reverb\n• 32-Voice Polyphony with Exact Passivity & Guaranteed Energy Stability";
+    [desc2 drawInRect:NSMakeRect(aboutModalRect_.origin.x + 24.0, curY - 70.0, 492.0, 85.0) withAttributes:bodyTextAttrs];
+
+    curY -= 92.0;
+    [@"Created by Matthew Tyas (mtyas)" drawAtPoint:NSMakePoint(aboutModalRect_.origin.x + 24.0, curY) withAttributes:bodyHeadAttrs];
+
+    curY -= 18.0;
+    NSString* authorText = @"Thank you for using electropiano! If you enjoy this instrument in your music productions\nor performances, please consider supporting ongoing open-source development.";
+    [authorText drawInRect:NSMakeRect(aboutModalRect_.origin.x + 24.0, curY - 26.0, 492.0, 36.0) withAttributes:bodyTextAttrs];
+
+    // Action Buttons / Links
+    aboutWebLinkRect_    = NSMakeRect(aboutModalRect_.origin.x + 24.0,  aboutModalRect_.origin.y + 20.0, 150.0, 36.0);
+    aboutKofiLinkRect_   = NSMakeRect(aboutModalRect_.origin.x + 184.0, aboutModalRect_.origin.y + 20.0, 180.0, 36.0);
+    aboutGithubLinkRect_ = NSMakeRect(aboutModalRect_.origin.x + 374.0, aboutModalRect_.origin.y + 20.0, 142.0, 36.0);
+
+    auto drawLinkBtn = [&](NSRect r, NSString* title, NSString* subtitle, NSColor* bgCol, NSColor* borderCol, NSColor* textCol) {
+        CGPathRef bp = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 5.0, 5.0, nullptr);
+        CGContextAddPath(ctx, bp);
+        CGContextSetFillColorWithColor(ctx, [bgCol CGColor]);
+        CGContextFillPath(ctx);
+        CGContextSetStrokeColorWithColor(ctx, [borderCol CGColor]);
+        CGContextSetLineWidth(ctx, 1.2f);
+        CGContextAddPath(ctx, bp);
+        CGContextStrokePath(ctx);
+        CGPathRelease(bp);
+
+        NSDictionary* tA = @{
+            NSFontAttributeName: [NSFont boldSystemFontOfSize:9.5],
+            NSForegroundColorAttributeName: textCol
+        };
+        const NSSize tsz = [title sizeWithAttributes:tA];
+        [title drawAtPoint:NSMakePoint(r.origin.x + (r.size.width - tsz.width) * 0.5, r.origin.y + 18.0) withAttributes:tA];
+
+        NSDictionary* sA = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:8.0],
+            NSForegroundColorAttributeName: [textCol colorWithAlphaComponent:0.8]
+        };
+        const NSSize ssz = [subtitle sizeWithAttributes:sA];
+        [subtitle drawAtPoint:NSMakePoint(r.origin.x + (r.size.width - ssz.width) * 0.5, r.origin.y + 5.0) withAttributes:sA];
+    };
+
+    drawLinkBtn(aboutWebLinkRect_, @"VISIT WEBSITE", @"mtyas.com",
+                [NSColor colorWithCalibratedRed:0.16 green:0.22 blue:0.30 alpha:1.0],
+                [NSColor colorWithCalibratedRed:0.30 green:0.45 blue:0.65 alpha:1.0],
+                [NSColor colorWithCalibratedRed:0.75 green:0.88 blue:1.0 alpha:1.0]);
+
+    drawLinkBtn(aboutKofiLinkRect_, @"SUPPORT ON KO-FI", @"ko-fi.com/mtyas",
+                [NSColor colorWithCalibratedRed:0.32 green:0.22 blue:0.10 alpha:1.0],
+                [NSColor colorWithCalibratedRed:0.95 green:0.68 blue:0.25 alpha:1.0],
+                [NSColor colorWithCalibratedRed:1.0 green:0.85 blue:0.45 alpha:1.0]);
+
+    drawLinkBtn(aboutGithubLinkRect_, @"PYPHS RESEARCH", @"github.com/pyphs",
+                [NSColor colorWithCalibratedRed:0.18 green:0.19 blue:0.22 alpha:1.0],
+                [NSColor colorWithCalibratedRed:0.40 green:0.42 blue:0.48 alpha:1.0],
+                [NSColor colorWithCalibratedWhite:0.92 alpha:1.0]);
+
+    CGColorSpaceRelease(cs);
+    CGContextRestoreGState(ctx);
+}
+
+// =============================================================================
 // MOUSE & INTERACTION HANDLING
 // =============================================================================
 - (void)mouseDown:(NSEvent*)event {
     NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
 
-    // If Preset Browser is open
+    // 1. If About Modal is open
+    if (aboutOpen_) {
+        if (NSPointInRect(p, aboutCloseRect_)) {
+            aboutOpen_ = false;
+            [self setNeedsDisplay:YES];
+            return;
+        }
+        if (NSPointInRect(p, aboutWebLinkRect_)) {
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://mtyas.com"]];
+            return;
+        }
+        if (NSPointInRect(p, aboutKofiLinkRect_)) {
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://ko-fi.com/mtyas"]];
+            return;
+        }
+        if (NSPointInRect(p, aboutGithubLinkRect_)) {
+            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/pyphs/pyphs"]];
+            return;
+        }
+        if (!NSPointInRect(p, aboutModalRect_)) {
+            aboutOpen_ = false;
+            [self setNeedsDisplay:YES];
+            return;
+        }
+        return;
+    }
+
+    // 2. If Preset Browser is open
     if (browserOpen_) {
         if (NSPointInRect(p, browserCloseRect_)) {
             browserOpen_ = false;
@@ -1239,7 +1423,7 @@ static void init3dAssets() {
             return;
         }
 
-        const NSRect listRect = NSMakeRect(browserModalRect_.origin.x + 20.0, browserModalRect_.origin.y + 48.0, browserModalRect_.size.width - 40.0, 270.0);
+        const NSRect listRect = NSMakeRect(browserModalRect_.origin.x + 20.0, browserModalRect_.origin.y + 48.0, browserModalRect_.size.width - 40.0, 290.0);
         if (NSPointInRect(p, listRect) && engine_) {
             const auto& presets = engine_->getPresetManager().getPresets();
             CGFloat rowY = NSMaxY(listRect) - 24.0;
@@ -1317,6 +1501,11 @@ static void init3dAssets() {
         [self setNeedsDisplay:YES];
         return;
     }
+    if (NSPointInRect(p, aboutButtonRect_)) {
+        aboutOpen_ = true;
+        [self setNeedsDisplay:YES];
+        return;
+    }
 
     // Sustain Pedal Switch
     if (NSPointInRect(p, pedalSwitchRect_)) {
@@ -1343,7 +1532,6 @@ static void init3dAssets() {
             }
 
             if (lastClickedKnobIdx_ == static_cast<int>(i) && (nowMs - lastClickTimestamp_) < 350) {
-                // Double click: Reset to default value
                 const float defVal = phs::kParamMetadata[pId].defaultValue;
                 if (engine_) engine_->setParamNormalized(pId, defVal);
                 if (paramCallback_) paramCallback_(pId, defVal);
@@ -1473,7 +1661,12 @@ static void init3dAssets() {
 }
 
 - (void)keyDown:(NSEvent*)event {
-    if (browserOpen_ && [event keyCode] == 53) { // Escape key closes browser
+    if (aboutOpen_ && [event keyCode] == 53) {
+        aboutOpen_ = false;
+        [self setNeedsDisplay:YES];
+        return;
+    }
+    if (browserOpen_ && [event keyCode] == 53) {
         browserOpen_ = false;
         [self setNeedsDisplay:YES];
         return;
@@ -1499,7 +1692,7 @@ static void init3dAssets() {
             for (uint32_t i = 0; i < phs::kNumParams; ++i) {
                 curParams[i] = engine_->getParamNormalized(i);
             }
-            engine_->getPresetManager().saveUserPreset([name UTF8String], phs::PresetCategory::User, "User", "", curParams);
+            engine_->getPresetManager().saveUserPreset([name UTF8String], phs::PresetCategory::User, "mtyas", "", curParams);
             [self setNeedsDisplay:YES];
         }
     }

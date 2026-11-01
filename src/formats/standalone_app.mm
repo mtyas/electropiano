@@ -119,7 +119,7 @@ static void coreMidiReadProc(const MIDIPacketList *pktlist, void *readProcRefCon
     }
 
     // 2. Setup CoreMIDI Input (connect to all available hardware MIDI sources)
-    if (MIDIClientCreate(CFSTR("PyPHS Electric Piano MIDI"), nullptr, nullptr, &ctx_.midiClient) == noErr) {
+    if (MIDIClientCreate(CFSTR("electropiano MIDI"), nullptr, nullptr, &ctx_.midiClient) == noErr) {
         if (MIDIInputPortCreate(ctx_.midiClient, CFSTR("Input"), coreMidiReadProc, &ctx_, &ctx_.midiInPort) == noErr) {
             const ItemCount numSources = MIDIGetNumberOfSources();
             for (ItemCount i = 0; i < numSources; ++i) {
@@ -136,7 +136,7 @@ static void coreMidiReadProc(const MIDIPacketList *pktlist, void *readProcRefCon
                                           styleMask:style
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
-    [window_ setTitle:@"PyPHS Electric Piano — Port-Hamiltonian Rhodes & Wurlitzer"];
+    [window_ setTitle:@"electropiano by mtyas — Port-Hamiltonian Rhodes & Wurlitzer"];
     [window_ center];
     [window_ setDelegate:self];
 

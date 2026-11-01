@@ -3,7 +3,7 @@ CXXFLAGS := -std=c++17 -O3 -ffast-math -Wall -Wextra -fPIC -fvisibility=hidden
 OBJCXXFLAGS := $(CXXFLAGS) -ObjC++ -fno-objc-arc
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework CoreMIDI -framework CoreFoundation
 
-PLUGIN_NAME := PyPHS Electric Piano
+PLUGIN_NAME := electropiano
 BUILD_DIR := build
 
 CLAP_BUNDLE := $(BUILD_DIR)/$(PLUGIN_NAME).clap
@@ -33,12 +33,12 @@ clap: src/formats/clap_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'<plist version="1.0">' \
 		'<dict>' \
 		'  <key>CFBundleDevelopmentRegion</key><string>English</string>' \
-		'  <key>CFBundleExecutable</key><string>PyPHS Electric Piano</string>' \
-		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.clap</string>' \
-		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
+		'  <key>CFBundleExecutable</key><string>electropiano</string>' \
+		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.clap</string>' \
+		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(CLAP_BUNDLE)/Contents/Info.plist"
@@ -58,12 +58,12 @@ vst3: src/formats/vst3_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'<plist version="1.0">' \
 		'<dict>' \
 		'  <key>CFBundleDevelopmentRegion</key><string>English</string>' \
-		'  <key>CFBundleExecutable</key><string>PyPHS Electric Piano</string>' \
-		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.vst3</string>' \
-		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
+		'  <key>CFBundleExecutable</key><string>electropiano</string>' \
+		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.vst3</string>' \
+		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(VST3_BUNDLE)/Contents/Info.plist"
@@ -83,22 +83,22 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'<plist version="1.0">' \
 		'<dict>' \
 		'  <key>CFBundleDevelopmentRegion</key><string>English</string>' \
-		'  <key>CFBundleExecutable</key><string>PyPHS Electric Piano</string>' \
-		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.audiounit</string>' \
-		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
+		'  <key>CFBundleExecutable</key><string>electropiano</string>' \
+		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.audiounit</string>' \
+		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
 		'  <key>AudioComponents</key>' \
 		'  <array>' \
 		'    <dict>' \
-		'      <key>name</key><string>PyPHS: Electric Piano</string>' \
-		'      <key>description</key><string>Port-Hamiltonian Rhodes and Wurlitzer Electric Piano</string>' \
+		'      <key>name</key><string>mtyas: electropiano</string>' \
+		'      <key>description</key><string>electropiano by mtyas - Port-Hamiltonian Rhodes &amp; Wurlitzer</string>' \
 		'      <key>factoryFunction</key><string>PhsElectricPianoAUFactory</string>' \
-		'      <key>manufacturer</key><string>PyPH</string>' \
-		'      <key>subtype</key><string>PhsE</string>' \
+		'      <key>manufacturer</key><string>mtya</string>' \
+		'      <key>subtype</key><string>ePno</string>' \
 		'      <key>type</key><string>aumu</string>' \
-		'      <key>version</key><integer>65792</integer>' \
+		'      <key>version</key><integer>66048</integer>' \
 		'      <key>sandboxSafe</key><true/>' \
 		'    </dict>' \
 		'  </array>' \
@@ -120,12 +120,12 @@ app: src/formats/standalone_app.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'<plist version="1.0">' \
 		'<dict>' \
 		'  <key>CFBundleDevelopmentRegion</key><string>English</string>' \
-		'  <key>CFBundleExecutable</key><string>PyPHS Electric Piano</string>' \
-		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.standalone</string>' \
-		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
+		'  <key>CFBundleExecutable</key><string>electropiano</string>' \
+		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.standalone</string>' \
+		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>APPL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
 		'  <key>NSHighResolutionCapable</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(APP_BUNDLE)/Contents/Info.plist"

@@ -26,17 +26,17 @@ jobs:
       - name: Package macOS Artifacts
         run: |
           mkdir -p release-macos
-          cp -R "build/PyPHS Electric Piano.vst3" release-macos/
-          cp -R "build/PyPHS Electric Piano.clap" release-macos/
-          cp -R "build/PyPHS Electric Piano.component" release-macos/
-          cp -R "build/PyPHS Electric Piano.app" release-macos/
-          cd release-macos && zip -r ../PyPHS-Electric-Piano-macOS-Universal.zip *
+          cp -R "build/electropiano.vst3" release-macos/
+          cp -R "build/electropiano.clap" release-macos/
+          cp -R "build/electropiano.component" release-macos/
+          cp -R "build/electropiano.app" release-macos/
+          cd release-macos && zip -r ../electropiano-macOS-Universal.zip *
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-macOS
-          path: PyPHS-Electric-Piano-macOS-Universal.zip
+          name: electropiano-macOS
+          path: electropiano-macOS-Universal.zip
 
   # ============================================================================
   # 2. Windows Build (VST3, CLAP, Standalone)
@@ -53,7 +53,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake --build build --config Release --target PyPHS_CLAP PyPHS_VST3 test_phs_piano
+          cmake --build build --config Release --target electropiano_CLAP electropiano_VST3 test_phs_piano
 
       - name: Run Tests
         run: |
@@ -65,13 +65,13 @@ jobs:
           mkdir -p release-windows
           cp build/Release/*.clap release-windows/ 2>/dev/null || true
           cp build/Release/*.vst3 release-windows/ 2>/dev/null || true
-          cd release-windows && 7z a ../PyPHS-Electric-Piano-Windows-x64.zip *
+          cd release-windows && 7z a ../electropiano-Windows-x64.zip *
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-Windows
-          path: PyPHS-Electric-Piano-Windows-x64.zip
+          name: electropiano-Windows
+          path: electropiano-Windows-x64.zip
 
   # ============================================================================
   # 3. Linux Build (VST3, CLAP)
@@ -93,7 +93,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake --build build --target PyPHS_CLAP PyPHS_VST3 test_phs_piano -j$(nproc)
+          cmake --build build --target electropiano_CLAP electropiano_VST3 test_phs_piano -j$(nproc)
 
       - name: Run Tests
         run: |
@@ -104,13 +104,13 @@ jobs:
           mkdir -p release-linux
           cp build/*.clap release-linux/ 2>/dev/null || true
           cp build/*.vst3 release-linux/ 2>/dev/null || true
-          tar -czvf PyPHS-Electric-Piano-Linux-x64.tar.gz -C release-linux .
+          tar -czvf electropiano-Linux-x64.tar.gz -C release-linux .
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-Linux
-          path: PyPHS-Electric-Piano-Linux-x64.tar.gz
+          name: electropiano-Linux
+          path: electropiano-Linux-x64.tar.gz
 
   # ============================================================================
   # 4. GitHub Release on Tag
@@ -123,23 +123,23 @@ jobs:
       - name: Download macOS Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-macOS
+          name: electropiano-macOS
 
       - name: Download Windows Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-Windows
+          name: electropiano-Windows
 
       - name: Download Linux Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: PyPHS-Electric-Piano-Linux
+          name: electropiano-Linux
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            PyPHS-Electric-Piano-macOS-Universal.zip
-            PyPHS-Electric-Piano-Windows-x64.zip
-            PyPHS-Electric-Piano-Linux-x64.tar.gz
+            electropiano-macOS-Universal.zip
+            electropiano-Windows-x64.zip
+            electropiano-Linux-x64.tar.gz
           generate_release_notes: true

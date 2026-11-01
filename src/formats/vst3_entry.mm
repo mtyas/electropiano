@@ -508,9 +508,9 @@ public:
     tresult SMTG_API getFactoryInfo(PFactoryInfo* info) override {
         if (!info) return kInvalidArgument;
         std::memset(info, 0, sizeof(*info));
-        std::snprintf(info->vendor, sizeof(info->vendor), "PyPHS Physical Modeling");
-        std::snprintf(info->url, sizeof(info->url), "https://github.com/pyphs/pyphs");
-        std::snprintf(info->email, sizeof(info->email), "contact@pyphs.org");
+        std::snprintf(info->vendor, sizeof(info->vendor), "mtyas");
+        std::snprintf(info->url, sizeof(info->url), "https://mtyas.com");
+        std::snprintf(info->email, sizeof(info->email), "contact@mtyas.com");
         info->flags = PFactoryInfo::kUnicode;
         return kResultOk;
     }
@@ -525,7 +525,7 @@ public:
         std::memcpy(info->cid, kPhsProcessorCID, sizeof(TUID));
         info->cardinality = PClassInfo::kManyInstances;
         std::snprintf(info->category, sizeof(info->category), "Audio Module Class");
-        std::snprintf(info->name, sizeof(info->name), "PyPHS Electric Piano");
+        std::snprintf(info->name, sizeof(info->name), "electropiano");
         return kResultOk;
     }
 
@@ -535,11 +535,11 @@ public:
         std::memcpy(info->cid, kPhsProcessorCID, sizeof(TUID));
         info->cardinality = PClassInfo::kManyInstances;
         std::snprintf(info->category, sizeof(info->category), "Audio Module Class");
-        std::snprintf(info->name, sizeof(info->name), "PyPHS Electric Piano");
+        std::snprintf(info->name, sizeof(info->name), "electropiano");
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
-        std::snprintf(info->vendor, sizeof(info->vendor), "PyPHS Physical Modeling");
-        std::snprintf(info->version, sizeof(info->version), "1.1.0");
+        std::snprintf(info->vendor, sizeof(info->vendor), "mtyas");
+        std::snprintf(info->version, sizeof(info->version), "1.2.0");
         std::snprintf(info->sdkVersion, sizeof(info->sdkVersion), "VST 3.7.8");
         return kResultOk;
     }
@@ -550,11 +550,11 @@ public:
         std::memcpy(info->cid, kPhsProcessorCID, sizeof(TUID));
         info->cardinality = PClassInfo::kManyInstances;
         std::snprintf(info->category, sizeof(info->category), "Audio Module Class");
-        copyAsciiToUtf16(info->name, "PyPHS Electric Piano", 64);
+        copyAsciiToUtf16(info->name, "electropiano", 64);
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
-        copyAsciiToUtf16(info->vendor, "PyPHS Physical Modeling", 64);
-        copyAsciiToUtf16(info->version, "1.1.0", 64);
+        copyAsciiToUtf16(info->vendor, "mtyas", 64);
+        copyAsciiToUtf16(info->version, "1.2.0", 64);
         copyAsciiToUtf16(info->sdkVersion, "VST 3.7.8", 64);
         return kResultOk;
     }

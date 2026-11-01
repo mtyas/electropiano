@@ -82,23 +82,18 @@ public:
         const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
 
         // =========================================================================
-        // 1. Preamp Saturation (Passive Discrete-Gradient Antiderivative Waveshaper)
+        // 1. Preamp Saturation (Smooth Continuous Tube / JFET Waveshaper)
         // =========================================================================
         const float driveParam = params[kParamPreampDrive];
-        const float driveGain = 1.0f + 5.5f * driveParam * driveParam;
+        const float driveGain = 1.0f + 4.5f * driveParam * driveParam;
         const float xDriven = monoIn * driveGain;
-        const float dx = xDriven - preampXPrev_;
-        float preampOut = 0.0f;
-        // Asymmetrical tube/JFET potential phi(x) = log(cosh(x)) + 0.12 * x^2 / (1 + x^2)
-        if (std::fabs(dx) > 1e-5f) {
-            preampOut = (evalPreampAntideriv(xDriven) - evalPreampAntideriv(preampXPrev_)) / dx;
-        } else {
-            const float xMid = 0.5f * (xDriven + preampXPrev_);
-            preampOut = std::tanh(xMid) + 0.12f * xMid / ((1.0f + xMid * xMid) * (1.0f + xMid * xMid));
-        }
-        preampXPrev_ = xDriven;
-        // Compensate gain gently so higher drive adds harmonic bark without blowing up volume
-        preampOut *= 1.0f / std::sqrt(1.0f + 0.65f * (driveGain - 1.0f));
+
+        // Clean algebraic soft saturation with warm second-harmonic bloom:
+        // (No discrete difference quotient -> zero floating point cancellation hash!)
+        const float x2 = xDriven * xDriven;
+        const float asym = 0.08f * driveParam * (x2 / (1.0f + 0.6f * x2));
+        float preampOut = (xDriven + asym) / std::sqrt(1.0f + 0.75f * x2);
+        preampOut *= 1.0f / std::sqrt(1.0f + 0.5f * (driveGain - 1.0f));
 
         // =========================================================================
         // 2. Passive Baxandall Bass & Treble Tone Stack
@@ -220,10 +215,10 @@ public:
         // =========================================================================
         const float revMix = params[kParamReverbMix];
         if (revMix > 0.001f) {
-            const float revDecay = 0.65f + 0.26f * params[kParamReverbDecay];
-            const float damp = 0.45f; // Absorbs high-frequency hiss on each reflection
-            const float alphaRev = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f * dt_);
-            const float revInRaw = (sigL + sigR) * 0.25f;
+            const float revDecay = 0.45f + 0.35f * params[kParamReverbDecay];
+            const float damp = 0.62f; // Warm high-frequency acoustic damping
+            const float alphaRev = 1.0f - std::exp(-2.0f * 3.14159265f * 2000.0f * dt_);
+            const float revInRaw = (sigL + sigR) * 0.15f;
             revLpState_ += alphaRev * (revInRaw - revLpState_);
             const float revInL = revLpState_;
             const float revInR = revLpState_;
@@ -245,6 +240,9 @@ public:
                 combIdxR_[i] = (combIdxR_[i] + 1) % combLenR_[i];
                 sumR += outCombR;
             }
+
+            sumL *= 0.25f;
+            sumR *= 0.25f;
 
             // 2 Series All-pass diffusers per channel
             for (int i = 0; i < 2; ++i) {

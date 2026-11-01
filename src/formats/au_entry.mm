@@ -417,7 +417,7 @@ static OSStatus auGetProperty(void *selfPtr,
             CFDictionarySetValue(dict, CFSTR("type"), nType);
             CFDictionarySetValue(dict, CFSTR("subtype"), nSub);
             CFDictionarySetValue(dict, CFSTR("manufacturer"), nManu);
-            CFDictionarySetValue(dict, CFSTR("name"), CFSTR("PyPHS Electric Piano"));
+            CFDictionarySetValue(dict, CFSTR("name"), CFSTR("electropiano"));
             CFDictionarySetValue(dict, CFSTR("data"), stateData);
 
             CFRelease(nVer);

@@ -471,9 +471,9 @@ void renderShowcaseDemos() {
 int main() {
     bool ok = true;
     ok &= verifyPhsPassivity();
-    ok &= testClapBundle("build/PyPHS Electric Piano.clap/Contents/MacOS/PyPHS Electric Piano");
-    ok &= testVst3Bundle("build/PyPHS Electric Piano.vst3/Contents/MacOS/PyPHS Electric Piano");
-    ok &= testAuBundle("build/PyPHS Electric Piano.component/Contents/MacOS/PyPHS Electric Piano");
+    ok &= testClapBundle("build/electropiano.clap/Contents/MacOS/electropiano");
+    ok &= testVst3Bundle("build/electropiano.vst3/Contents/MacOS/electropiano");
+    ok &= testAuBundle("build/electropiano.component/Contents/MacOS/electropiano");
     renderShowcaseDemos();
 
     if (ok) {

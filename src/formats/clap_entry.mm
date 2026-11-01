@@ -27,14 +27,14 @@ static const char *const kClapFeatures[] = {
 
 static const clap_plugin_descriptor_t kClapDescriptor = {
     CLAP_VERSION,
-    "org.pyphs.pianoelectro",
-    "PyPHS Electric Piano",
-    "PyPHS Physical Modeling",
-    "https://github.com/pyphs/pyphs",
-    "https://github.com/pyphs/pyphs",
-    "https://github.com/pyphs/pyphs",
-    "1.1.0",
-    "Port-Hamiltonian Rhodes & Wurlitzer Electro-Mechanical Piano Simulator",
+    "com.mtyas.electropiano",
+    "electropiano",
+    "mtyas",
+    "https://mtyas.com",
+    "https://mtyas.com",
+    "https://ko-fi.com/mtyas",
+    "1.2.0",
+    "electropiano by mtyas - Port-Hamiltonian Rhodes & Wurlitzer Physical Model",
     kClapFeatures
 };
 

@@ -168,15 +168,19 @@ public:
         xiPrev_ = 0.0f;
         hammerDetached_ = false;
 
-        // Clean modal state on strike
+        // Clean modal state and filter memories on strike
         for (int m = 0; m < kNumBeamModes; ++m) {
-            qBeam_[m] *= 0.05f;
-            pBeam_[m] *= 0.05f;
+            qBeam_[m] = 0.0;
+            pBeam_[m] = 0.0;
         }
-        qTb_ *= 0.05f;
-        pTb_ *= 0.05f;
+        qTb_ = 0.0;
+        pTb_ = 0.0;
+        coilLPState_ = 0.0f;
+        coilBPState_ = 0.0f;
+        dcBlockX1_ = 0.0f;
+        dcBlockY1_ = 0.0f;
 
-        wBodyPrev_ = qBeam_[0];
+        wBodyPrev_ = 0.0f;
     }
 
     void noteOff(bool sustainPedalDown) {
@@ -244,8 +248,8 @@ public:
             float modeT60 = baseT60;
             if (m == 1) {
                 // Iconic Rhodes/Wurli "Tine Chime / Bell" overtone (~6.27 * f0):
-                // Rings clearly on attack and naturally decays over 0.3 - 1.0 seconds
-                modeT60 = (0.25f + 0.75f * bellParam * bellParam) * (0.45f + 0.55f * keyScale_);
+                // Rings cleanly on attack and naturally decays smoothly
+                modeT60 = (0.05f + 0.20f * bellParam * bellParam) * (0.40f + 0.60f * keyScale_);
             } else if (m == 2) {
                 // High crystalline strike ping (~17.55 * f0): decays rapidly in 20 - 60 ms
                 modeT60 = (0.015f + 0.045f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_));
@@ -283,9 +287,9 @@ public:
                 cPickup_[m] = 1.0f;
             } else if (m == 1) {
                 // Tine bell mode (~6.27 * f0): natural musical balance without harsh hiss
-                const float bellAmt = (modelType == 2) ? (0.03f + 0.08f * bellParam)
-                                    : (modelType == 1) ? (0.06f + 0.14f * bellParam)
-                                                       : (0.04f + 0.10f * bellParam);
+                const float bellAmt = (modelType == 2) ? (0.015f + 0.040f * bellParam)
+                                    : (modelType == 1) ? (0.025f + 0.060f * bellParam)
+                                                       : (0.020f + 0.050f * bellParam);
                 cPickup_[m] = bellAmt * (0.50f + 0.50f * keyScale_);
             } else if (m == 2) {
                 const float pingAmt = (modelType == 2) ? (0.010f + 0.025f * bellParam)
