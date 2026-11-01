@@ -1,7 +1,6 @@
 #pragma once
 
-#include "../dsp/PhsSynthEngine.hpp"
-#include <functional>
+#include "PhsEditor.hpp"
 
 #ifdef __OBJC__
 #import <Cocoa/Cocoa.h>
@@ -11,18 +10,14 @@ typedef void NSView;
 
 namespace phs {
 
-// Callback invoked when the user turns a knob or changes preset in the GUI,
-// allowing the plugin wrapper (VST3 / CLAP / AU) to notify the host for automation.
-using ParamChangeCallback = std::function<void(uint32_t paramId, float normalizedValue)>;
-
-static constexpr int kEditorWidth = 880;
-static constexpr int kEditorHeight = 580;
-
-// Creates a retained NSView* instance backed by our CoreGraphics editor.
+// Creates a retained NSView* hosting the shared editor (CoreGraphics canvas).
 // Caller owns the returned NSView* (call [view release] or CFRelease when destroying).
 NSView* createPhsEditorView(PhsSynthEngine* engine, ParamChangeCallback onParamChange = nullptr);
 
 // Explicitly stop timer and detach engine before releasing view
 void destroyPhsEditorView(NSView* view);
+
+// The editor inside a view created above (for tools that script it, e.g. screenshots)
+gui::Editor* editorOfPhsView(NSView* view);
 
 } // namespace phs

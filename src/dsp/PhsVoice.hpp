@@ -1,6 +1,23 @@
 #pragma once
 
+// One polyphonic voice, built from swappable stages:
+//
+//   Resonator  Rhodes tine: port-Hamiltonian hammer + cantilever beam + tone bar,
+//              after Falaize & Helie, "Passive simulation of the nonlinear
+//              port-Hamiltonian modeling of a Rhodes piano", J. Sound Vib. 390
+//              (2017), as implemented in PyPHS (github.com/pyphs/pyphs,
+//              dictionary: mechanics.felt, beams.cantilever, transducers.pickup).
+//              Wurlitzer reed: OpenWurli's modal reed + hammer (wurli/WurliVoice.hpp).
+//   Pickup     Electromagnetic: the flux law of Falaize & Helie eq. (25) followed by
+//              the coil's RLC resonance. Electrostatic: OpenWurli's field-solved
+//              overlap law into the 200A plate network.
+//
+// Any resonator can drive any pickup. Voice output is in "voice units" (the level
+// the suitcase chain expects); kVoiceUnitsPerVolt converts to the 200A pickup's
+// volts so that reed + electrostatic + 200A amp reproduces OpenWurli exactly.
+
 #include "PhsParameters.hpp"
+#include "wurli/WurliVoice.hpp"
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -10,59 +27,63 @@ namespace phs {
 static constexpr float kPi = 3.14159265358979323846f;
 static constexpr float kTwoPi = 6.28318530717958647692f;
 
-// Modal degrees of freedom in the Port-Hamiltonian resonator:
-// Mode 0: Fundamental transverse bending mode (1.0000 * f0)
-// Mode 1: 2nd Euler-Bernoulli cantilever mode (~6.2669 * f0 for Rhodes tine, ~5.50 * f0 for Wurli reed)
-// Mode 2: 3rd Euler-Bernoulli cantilever mode (~17.547 * f0 crystalline strike ping)
-// Mode 3: 2nd harmonic structural/bridge resonance (2.0002 * f0)
-// Mode 4: 3rd harmonic structural resonance (3.0006 * f0)
+// Modal degrees of freedom of the tine:
+// Modes 0-2: Euler-Bernoulli cantilever modes (cosh(bL)cos(bL) = -1), as in PyPHS beams.cantilever
+// Modes 3-4: 2nd/3rd harmonic mounting/tone-bar resonances (electropiano extension, not in PyPHS)
 static constexpr int kNumBeamModes = 5;
 
-static constexpr float kCantileverBetaL[3] = {
-    1.87510407f,
-    4.69409113f,
-    7.85475744f
-};
+static constexpr float kCantileverBetaL[3] = {1.87510407f, 4.69409113f, 7.85475744f};
+static constexpr float kModalFreqRatios[kNumBeamModes] = {1.0000000f, 6.2668933f, 17.547467f, 2.0002000f, 3.0006000f};
+// Extra pickup coupling of the bell modes (the tine tip's bend is close to the pickup)
+static constexpr float kChimePickupBoost[kNumBeamModes] = {1.0f, 20.0f, 10.0f, 1.0f, 1.0f};
 
-static constexpr float kModalFreqRatios[kNumBeamModes] = {
-    1.0000000f,  // Mode 0: Fundamental f0
-    6.2668933f,  // Mode 1: Cantilever Tine Chime / Bell overtone
-    17.547467f,  // Mode 2: Cantilever High Metallic Ping
-    2.0002000f,  // Mode 3: 2nd Harmonic Warmth (mounting/bridge coupling)
-    3.0006000f   // Mode 4: 3rd Harmonic Body
-};
-
-// Evaluate normalized spatial eigenfunction phi_m(x/L) at strike point xNorm = x/L in [0, 1]
+// Normalised cantilever eigenfunction phi_m(x/L) (|phi_m(1)| == 1 at the free tip)
 inline float evalCantileverModeShape(int modeIdx, float xNorm) {
     xNorm = std::clamp(xNorm, 0.02f, 1.0f);
     if (modeIdx < 3) {
         const float bL = kCantileverBetaL[modeIdx];
         const float bx = bL * xNorm;
         const float sigma = (std::cosh(bL) + std::cos(bL)) / (std::sinh(bL) + std::sin(bL));
-        const float val = (std::cosh(bx) - std::cos(bx)) - sigma * (std::sinh(bx) - std::sin(bx));
-        return 0.5f * val; // Normalized so |phi_m(1.0)| == 1.0 at the free tip
+        return 0.5f * ((std::cosh(bx) - std::cos(bx)) - sigma * (std::sinh(bx) - std::sin(bx)));
     } else if (modeIdx == 3) {
         return std::sin(kPi * xNorm) * 0.55f;
-    } else {
-        return std::sin(1.5f * kPi * xNorm) * 0.38f;
     }
+    return std::sin(1.5f * kPi * xNorm) * 0.38f;
+}
+
+// Falaize & Helie (JSV 2017) eq. (25): magnetic flux sensitivity of the Rhodes pickup to
+// the tine tip position q (m). Rb: tine tip radius, Rp: pickup magnet radius,
+// Lh / Lv: horizontal / vertical tip-to-pickup distances. (dmu set to 1, as in PyPHS.)
+inline double falaizeHeliePickupSensitivity(double q, double Rb, double Rp, double Lh, double Lv) {
+    const double lh2 = Lh * Lh;
+    const double f1 = (q - Rp + Lv) * (q - Rp + Lv) + lh2;
+    const double f2 = (q + Rp + Lv) * (q + Rp + Lv) + lh2;
+    return 2.0 * Rb * Rb * Rp * ((f1 - 2.0 * lh2) / (f1 * f1) - (f2 - 2.0 * lh2) / (f2 * f2));
 }
 
 struct VoiceTelemetry {
-    double totalHamiltonian = 0.0;   // Stored resonator Hamiltonian H_res(x) >= 0
+    double totalHamiltonian = 0.0;   // Stored energy H >= 0 (hammer + felt + beam + tone bar)
     double dissipatedPower = 0.0;    // Instantaneous dissipated power P_diss >= 0
-    double inputPower = 0.0;         // Instantaneous external power P_in from hammer impact
-    float tipDisplacement = 0.0f;    // Tine/reed tip displacement w(x_pickup, t) in mm
-    float tipVelocity = 0.0f;        // Normalized tip velocity
-    float hammerCompression = 0.0f;  // Felt compression xi in mm
+    double inputPower = 0.0;         // Power the hammer transfers into the beam
+    float tipDisplacement = 0.0f;    // Tip displacement at the pickup (mm)
+    float tipVelocity = 0.0f;        // Normalised tip velocity
+    float hammerCompression = 0.0f;  // Felt compression (mm)
     float pickupOutput = 0.0f;       // Output audio signal
 };
 
 class PhsVoice {
 public:
+    enum class Resonator { Tine, Reed };
+    enum class Pickup { Magnetic, Electrostatic };
+
     void prepare(float sampleRate) {
         fs_ = std::max(8000.0f, sampleRate);
         dt_ = 1.0f / fs_;
+        releaseDecayMul_ = std::exp(-dt_ / 0.055f);
+        damperStep_ = dt_ / 0.012f;
+        dcBlockR_ = 1.0f - (kTwoPi * 20.0f / fs_);
+        thumpLenSamples_ = static_cast<uint64_t>(0.028f * fs_);
+        relTapLenSamples_ = static_cast<uint64_t>(0.016f * fs_);
         reset();
     }
 
@@ -75,26 +96,15 @@ public:
         midiNote_ = -1;
         ageSamples_ = 0;
         releaseAgeSamples_ = 0;
-
-        qh_ = 0.0f;
-        ph_ = 0.0f;
-        xiPrev_ = 0.0f;
+        qh_ = ph_ = 0.0;
         hammerDetached_ = true;
-
-        qTb_ = 0.0f;
-        pTb_ = 0.0f;
-
-        for (int m = 0; m < kNumBeamModes; ++m) {
-            qBeam_[m] = 0.0f;
-            pBeam_[m] = 0.0f;
-        }
-
-        wBodyPrev_ = 0.0f;
-        coilLPState_ = 0.0f;
-        coilBPState_ = 0.0f;
-        dcBlockX1_ = 0.0f;
-        dcBlockY1_ = 0.0f;
-
+        qTb_ = pTb_ = 0.0;
+        qBeam_.fill(0.0);
+        pBeam_.fill(0.0);
+        coilLPState_ = coilBPState_ = 0.0f;
+        dcBlockX1_ = dcBlockY1_ = 0.0f;
+        coeffsDirty_ = true;
+        coilQParam_ = -1.0f;
         telemetry_ = {};
     }
 
@@ -107,87 +117,31 @@ public:
         damperAmount_ = 0.0f;
         releaseEnv_ = 1.0f;
         ageSamples_ = 0;
+        releaseAgeSamples_ = 0;
+        reedDamperStarted_ = false;
+        coilLPState_ = coilBPState_ = 0.0f;
+        coilQParam_ = -1.0f;
+        dcBlockX1_ = dcBlockY1_ = 0.0f;
+        xPrevMm_ = 0.0;
+        geomKey_ = -1.0f;
 
-        const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
-        modelType_ = modelType;
-
-        // Fundamental frequency in Hz
+        resonator_ = stepIndex(params[kParamResonator], 1) ? Resonator::Reed : Resonator::Tine;
+        pickup_ = stepIndex(params[kParamPickupType], 1) ? Pickup::Electrostatic : Pickup::Magnetic;
+        modelType_ = stepIndex(params[kParamModelType], 3);
         f0_ = 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
-
-        // Key-scaling factor across 88-key range (0.0 at A0=21, 1.0 at C8=108)
         keyScale_ = std::clamp((static_cast<float>(midiNote) - 21.0f) / 87.0f, 0.0f, 1.0f);
 
-        // Dynamic touch & velocity curve shaping:
-        // touch = 0.0 -> gamma = 2.70 (Heavy / Expressive Touch: soft playing is very gentle, only hard hits bark)
-        // touch = 0.5 -> gamma = 1.45 (Standard vintage dynamic touch)
-        // touch = 1.0 -> gamma = 0.45 (Light / Stage Touch: punchy, immediate bark and fullness even on gentle touches)
-        const float touchParam = params[kParamVelocityCurve];
-        const float gamma = 2.70f - 2.25f * touchParam;
-        const float shapedVel = std::pow(velocity_, gamma);
-        shapedVel_ = shapedVel;
-
-        // --- 1. Update Modal Beam & Tone-Bar Parameters ---
-        updateModalParameters(params);
-        lastStrikeParam_   = params[kParamStrikePosition];
-        lastDecayParam_    = params[kParamTineDecay];
-        lastBellParam_     = params[kParamTineBell];
-        lastTbParam_       = params[kParamToneBarCoupling];
-        lastKeyNoiseParam_ = params[kParamKeyNoise];
-
-        // --- 2. Port-Hamiltonian Hammer (H) Initialization ---
-        const float hardness = params[kParamHammerHardness];
-        // Dynamic felt stiffening with velocity:
-        const float effHardness = std::clamp(hardness + 0.35f * (shapedVel - 0.5f), 0.02f, 0.98f);
-        alphaHammer_ = (modelType == 2) ? (2.10f + 0.90f * effHardness) : (1.85f + 0.85f * effHardness);
-
-        mHammer_ = 1.0f;
-
-        // Contact duration tau_c (seconds):
-        // Soft strike / soft hammer: ~2.40 ms (warm, round, dark attack)
-        // Hard strike / hard hammer: ~0.42 ms (sharp, snappy, bright attack transient)
-        const float velStiffening = std::pow(std::max(0.08f, shapedVel), 0.28f);
-        const float tauContact = ((0.00240f - 0.00198f * effHardness) / velStiffening) * std::pow(0.55f, keyScale_);
-
-        // Target peak tip displacement w_max (in mm):
-        // Soft strikes stay in linear zone (0.04 mm), hard strikes enter heavy nonlinear saturation (0.85 mm)
-        const float targetTipMm = 0.035f + (0.35f + 0.45f * (1.0f - 0.35f * touchParam)) * shapedVel;
-
-        // Required impulse J_total so Mode 0 reaches targetTipMm:
-        const float totalImpulse = (massMode_[0] * targetTipMm * omegaMode_[0]) / cStrike_[0];
-
-        // A rebounding hammer of mass m_h delivers total impulse J_total ~ 1.85 * m_h * v_h0:
-        const float vHammer0 = totalImpulse / (1.85f * mHammer_);
-        const float xiNom = std::max(1e-4f, (tauContact * vHammer0) / 2.94f);
-
-        // Exact Hertzian stiffness k_h so peak compression equals xiNom over duration tauContact:
-        kHammer_ = ((alphaHammer_ + 1.0f) * 0.5f * mHammer_ * vHammer0 * vHammer0)
-                 / std::pow(xiNom, alphaHammer_ + 1.0f);
-
-        // Hunt-Crossley dissipative felt loss parameter lambda_h >= 0:
-        // Cushion = 0: high restitution (elastic, snappy bounce, maximum energy transfer)
-        // Cushion = 1: heavy felt compression (absorbs impact velocity, mellow spongey damping)
-        const float feltLoss = params[kParamHammerHysteresis];
-        lambdaHammer_ = (kHammer_ / vHammer0) * (0.02f + 0.75f * feltLoss);
-
-        qh_ = 0.0f;
-        ph_ = mHammer_ * vHammer0;
-        xiPrev_ = 0.0f;
-        hammerDetached_ = false;
-
-        // Clean modal state and filter memories on strike
-        for (int m = 0; m < kNumBeamModes; ++m) {
-            qBeam_[m] = 0.0;
-            pBeam_[m] = 0.0;
+        if (resonator_ == Resonator::Reed) {
+            noteOnReed(params);
+        } else {
+            noteOnTine(params);
         }
-        qTb_ = 0.0;
-        pTb_ = 0.0;
-        coilLPState_ = 0.0f;
-        coilBPState_ = 0.0f;
-        dcBlockX1_ = 0.0f;
-        dcBlockY1_ = 0.0f;
 
-        wBodyPrev_ = 0.0f;
-        releaseAgeSamples_ = 0;
+        // Electrostatic pickup: the comb section and side of the band follow the note
+        const int wMidi = std::clamp(midiNote, wurli::kMidiLo, wurli::kMidiHi);
+        const double swingMm = resonator_ == Resonator::Reed ? reed_.swingMm() : 1.0;
+        esPickup_.init(fs_, wMidi, swingMm, electrostaticRestMm(params[kParamPickupSymmetry]),
+                       wurli::kCTotal * std::pow(2.0, (0.45 - params[kParamPickupResonance]) * 2.0));
     }
 
     void noteOff(bool sustainPedalDown) {
@@ -208,423 +162,16 @@ public:
         }
     }
 
-    void updateModalParameters(const float* params) {
-        const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
-        modelType_ = modelType;
-
-        const float strikeNorm = params[kParamStrikePosition];
-        // Spatial strike location xStrike in [0.06 .. 0.48]:
-        // At 0.06: near clamp root -> rich high harmonics, biting edge
-        // At 0.48: near nodal center -> deep round fundamental, soft warmth
-        const float xStrike = 0.06f + strikeNorm * 0.42f;
-        const float decayParam = params[kParamTineDecay];
-        const float bellParam = params[kParamTineBell];
-        const float toneBarParam = params[kParamToneBarCoupling];
-        const float hardness = params[kParamHammerHardness];
-
-        // Primary fundamental decay time T60 (seconds):
-        // decayParam in [0..1]:
-        // at decayParam = 0.0 -> 0.35s (super-tight funk/clavinet staccato pluck!)
-        // at decayParam = 0.5 -> 6.8s (vintage classic singing Rhodes)
-        // at decayParam = 1.0 -> 28.0s (infinite lush ballad sustain)
-        const float decayCurve = decayParam * decayParam;
-        float baseT60 = (0.35f + 27.65f * decayCurve) * std::pow(0.50f, keyScale_);
-        if (modelType == 2) {
-            baseT60 *= 0.68f; // Wurlitzer 200A steel reed
-        }
-
-        for (int m = 0; m < kNumBeamModes; ++m) {
-            float ratio = kModalFreqRatios[m];
-            if (modelType == 2 && m == 1) {
-                ratio = 5.45f - 0.30f * toneBarParam;
-            } else if (modelType == 1 && m == 1) {
-                ratio = 6.268f;
-            }
-
-            const float fm = f0_ * ratio;
-            if (fm >= 0.44f * fs_) {
-                modeActive_[m] = false;
-                cStrike_[m] = 0.0f;
-                cPickup_[m] = 0.0f;
-                omegaMode_[m] = 100.0f;
-                dampMode_[m] = 1000.0f;
-                massMode_[m] = 1.0f;
-                stiffMode_[m] = 10000.0f;
-                continue;
-            }
-            modeActive_[m] = true;
-            // Exact bilinear/midpoint frequency pre-warping so every mode oscillates at exact pitch fm!
-            omegaMode_[m] = 2.0f * fs_ * std::tan(kPi * fm * dt_);
-
-            const float mEff = 25.0f;
-            massMode_[m] = mEff;
-            stiffMode_[m] = mEff * omegaMode_[m] * omegaMode_[m];
-
-            float modeT60 = baseT60;
-            if (m == 1) {
-                // Iconic Rhodes/Wurli "Tine Chime / Bell" overtone (~6.27 * f0):
-                // Decay time scales directly with chime knob:
-                // At chime = 0: decays in 25ms (completely dark, bell-free)
-                // At chime = 1: rings out for 0.65s (singing crystalline luster)
-                modeT60 = (0.025f + 0.60f * bellParam * bellParam) * (0.35f + 0.65f * keyScale_);
-            } else if (m == 2) {
-                // High crystalline strike ping (~17.55 * f0): decays rapidly in 15 - 50 ms
-                modeT60 = (0.010f + 0.065f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_));
-            } else if (m == 3) {
-                // Tone bar 2nd harmonic structural warmth
-                modeT60 = baseT60 * (0.45f + 0.45f * toneBarParam);
-            } else {
-                // Tone bar 3rd harmonic body
-                modeT60 = baseT60 * (0.30f + 0.35f * toneBarParam);
-            }
-            modeT60 = std::max(0.012f, modeT60);
-            dampMode_[m] = 13.81551f / modeT60; // Exact 2 * ln(1000) / T60
-
-            // Spatial coupling at hammer strike point c_m(x_strike)
-            const float rawShape = evalCantileverModeShape(m, xStrike);
-            if (m == 0) {
-                cStrike_[m] = 0.50f;
-            } else if (m == 1) {
-                // Chime excitation: directly gated and scaled by bellParam
-                const float chimeExcite = bellParam * (0.15f + 0.45f * hardness) * (0.30f + 0.70f * shapedVel_);
-                cStrike_[m] = -chimeExcite * (0.45f + 0.55f * std::fabs(rawShape));
-            } else if (m == 2) {
-                // Strike ping (decays in <40ms)
-                const float pingExcite = bellParam * (0.08f + 0.25f * hardness) * (0.25f + 0.75f * shapedVel_);
-                cStrike_[m] = pingExcite * std::fabs(rawShape);
-            } else if (m == 3) {
-                // Tone bar 2nd harmonic octave warmth
-                const float tbExcite = (0.02f + 0.38f * toneBarParam) * (0.35f + 0.65f * shapedVel_);
-                cStrike_[m] = rawShape * tbExcite;
-            } else {
-                // Tone bar 3rd harmonic body
-                const float tbExcite = (0.02f + 0.28f * toneBarParam) * (0.30f + 0.70f * shapedVel_);
-                cStrike_[m] = rawShape * tbExcite;
-            }
-
-            // Spatial coupling at pickup tip c_m(x_pickup)
-            if (m == 0) {
-                cPickup_[m] = 1.0f;
-            } else if (m == 1) {
-                // Tine bell mode (~6.27 * f0):
-                // At bellParam = 0 -> 0.0 (completely pure fundamental!)
-                // At bellParam = 1 -> 0.42 (radiant, cutting, iconic Rhodes chime!)
-                const float bellAmt = bellParam * ((modelType == 2) ? (0.12f + 0.18f * bellParam)
-                                                  : (modelType == 1) ? (0.18f + 0.24f * bellParam)
-                                                                     : (0.15f + 0.22f * bellParam));
-                cPickup_[m] = bellAmt * (0.45f + 0.55f * keyScale_);
-            } else if (m == 2) {
-                const float pingAmt = bellParam * ((modelType == 2) ? 0.08f : 0.12f);
-                cPickup_[m] = pingAmt * (0.40f + 0.60f * keyScale_);
-            } else if (m == 3) {
-                // Tone bar 2nd harmonic octave warmth
-                cPickup_[m] = (0.02f + 0.35f * toneBarParam) * (0.3f + 0.7f * shapedVel_);
-            } else {
-                const float h3 = (modelType == 2) ? (0.04f + 0.30f * toneBarParam) : (0.02f + 0.25f * toneBarParam);
-                cPickup_[m] = h3 * (0.25f + 0.75f * shapedVel_);
-            }
-        }
-
-        // --- Tone-Bar Coupled Resonator (T) Parameters ---
-        // Acoustic detuning creates iconic 0.4 - 1.8 Hz acoustic beating shimmer:
-        const float detuneHz = 0.35f + 1.20f * toneBarParam;
-        omegaTb_ = 2.0f * fs_ * std::tan(kPi * (f0_ + detuneHz) * dt_);
-        massTb_ = massMode_[0] * 8.0f;
-        stiffTb_ = massTb_ * omegaTb_ * omegaTb_;
-        dampTb_ = dampMode_[0] * (0.70f - 0.30f * toneBarParam);
-
-        // Strong physical coupling stiffness between tine clamp and tone bar:
-        // Scaled directly by toneBarParam from 0.005 (uncoupled dry pin) to 0.42 * stiffMode0 (deep resonance)
-        kCoupleTb_ = stiffMode_[0] * (0.005f + 0.42f * toneBarParam);
-    }
-
     float processSample(const float* params) {
-        if (!active_) {
-            return 0.0f;
-        }
+        if (!active_) return 0.0f;
         ++ageSamples_;
 
-        // Refresh modal parameters only when user moves a knob
-        if ((ageSamples_ & 63) == 0) {
-            const float strikeChange = std::fabs(params[kParamStrikePosition] - lastStrikeParam_);
-            const float decayChange  = std::fabs(params[kParamTineDecay] - lastDecayParam_);
-            const float bellChange   = std::fabs(params[kParamTineBell] - lastBellParam_);
-            const float tbChange     = std::fabs(params[kParamToneBarCoupling] - lastTbParam_);
-            const int newModel       = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
-            if (newModel != modelType_ || strikeChange > 1e-4f || decayChange > 1e-4f || bellChange > 1e-4f || tbChange > 1e-4f) {
-                updateModalParameters(params);
-                lastStrikeParam_ = params[kParamStrikePosition];
-                lastDecayParam_  = params[kParamTineDecay];
-                lastBellParam_   = params[kParamTineBell];
-                lastTbParam_     = params[kParamToneBarCoupling];
-            }
-        }
+        float out = resonator_ == Resonator::Reed ? processReed(params) : processTine(params);
 
-        // Damper felt engagement: smooth continuous landing over 12 ms (eliminates note-off clicks & state acceleration spikes!)
-        if (releasing_) {
-            damperAmount_ = std::min(1.0f, damperAmount_ + (dt_ / 0.012f));
-            releaseEnv_ *= std::exp(-dt_ / 0.055f);
-        } else {
-            damperAmount_ = 0.0f;
-            releaseEnv_ = 1.0f;
-        }
-        const float damperExtraDamp = damperAmount_ * ((modelType_ == 2) ? 75.0f : 55.0f);
-
-        // =========================================================================
-        // STEP 1: Port-Hamiltonian Hammer-Beam Impact (H <-> B)
-        //         Solved via Structure-Preserving Implicit Midpoint Rule
-        // =========================================================================
-        float contactForce = 0.0f;
-        float feltDissPower = 0.0f;
-
-        if (!hammerDetached_) {
-            const float wStrike = cStrike_[0] * qBeam_[0];
-            const float vStrike = cStrike_[0] * (pBeam_[0] / massMode_[0]);
-            const float vh = ph_ / mHammer_;
-            const float xiRelVel = vh - vStrike;
-
-            // Advance hammer position by half-step (Störmer-Verlet / Midpoint position)
-            const float qhMid = qh_ + 0.5f * dt_ * vh;
-            const float wStrikeMid = wStrike + 0.5f * dt_ * vStrike;
-            const float xiMid = qhMid - wStrikeMid;
-
-            if (xiMid > 0.0f) {
-                const float xiPow = std::pow(xiMid, alphaHammer_);
-                const float fStorage = kHammer_ * xiPow;
-                const float fDiss = lambdaHammer_ * xiPow * xiRelVel;
-                contactForce = std::max(0.0f, fStorage + fDiss);
-                feltDissPower = std::max(0.0f, fDiss * xiRelVel);
-
-                ph_ -= dt_ * contactForce;
-                qh_ = qhMid + 0.5f * dt_ * (ph_ / mHammer_);
-                xiPrev_ = xiMid;
-            } else {
-                qh_ += dt_ * vh;
-                xiPrev_ = 0.0f;
-                if (ph_ <= 0.0f && ageSamples_ > 4) {
-                    hammerDetached_ = true;
-                }
-            }
-        }
-
-        // =========================================================================
-        // STEP 2: Exact Implicit Midpoint Integration of Coupled Mode 0 + Tone-Bar
-        //         and Higher Cantilever Modes m = 1..4 (64-bit Double Precision)
-        // =========================================================================
-        double beamEnergy = 0.0;
-        double beamDissPower = 0.0;
-        double inputPower = 0.0;
-        const double dtD = static_cast<double>(dt_);
-        const double h = 0.5 * dtD;
-        const double h2 = h * h;
-
-        // 2A. Coupled 2x2 Implicit Midpoint Solve for Fundamental Mode 0 and Tone-Bar (tb)
-        {
-            const double m0 = massMode_[0];
-            const double kc = kCoupleTb_;
-            const double k0 = std::max(0.5f * stiffMode_[0], stiffMode_[0] - kCoupleTb_);
-            const double d0 = dampMode_[0] + damperExtraDamp;
-            const double R0 = m0 * d0;
-
-            const double mt = massTb_;
-            const double kt = stiffTb_;
-            const double dtb = dampTb_ + damperExtraDamp * 0.9f;
-            const double Rt = mt * dtb;
-
-            const double fExt0 = static_cast<double>(cStrike_[0]) * contactForce;
-
-            const double eps11 = h * d0 + h2 * (k0 + kc) / m0;
-            const double a11 = 1.0 + eps11;
-            const double a12 = -h2 * kc / mt;
-            const double a21 = -h2 * kc / m0;
-            const double eps22 = h * dtb + h2 * (kt + kc) / mt;
-            const double a22 = 1.0 + eps22;
-
-            const double q0Old = qBeam_[0];
-            const double p0Old = pBeam_[0];
-            const double qtOld = qTb_;
-            const double ptOld = pTb_;
-
-            const double rhs1 = -h * ((k0 + kc) * q0Old - kc * qtOld) - eps11 * p0Old - a12 * ptOld + h * fExt0;
-            const double rhs2 = -h * (-kc * q0Old + (kt + kc) * qtOld) - a21 * p0Old - eps22 * ptOld;
-
-            const double det = a11 * a22 - a12 * a21;
-            const double invDet = 1.0 / det;
-            const double dp0Mid = (a22 * rhs1 - a12 * rhs2) * invDet;
-            const double dptMid = (-a21 * rhs1 + a11 * rhs2) * invDet;
-
-            const double p0Mid = p0Old + dp0Mid;
-            const double ptMid = ptOld + dptMid;
-            const double p0New = p0Old + 2.0 * dp0Mid;
-            const double q0New = q0Old + (dtD / m0) * p0Mid;
-            const double ptNew = ptOld + 2.0 * dptMid;
-            const double qtNew = qtOld + (dtD / mt) * ptMid;
-
-            qBeam_[0] = q0New;
-            pBeam_[0] = p0New;
-            qTb_ = qtNew;
-            pTb_ = ptNew;
-
-            const double qDiff = q0New - qtNew;
-            beamEnergy += 0.5 * k0 * q0New * q0New + 0.5 * (p0New * p0New) / m0
-                        + 0.5 * kt * qtNew * qtNew + 0.5 * (ptNew * ptNew) / mt
-                        + 0.5 * kc * qDiff * qDiff;
-
-            const double v0Mid = p0Mid / m0;
-            const double vtMid = ptMid / mt;
-            beamDissPower += R0 * v0Mid * v0Mid + Rt * vtMid * vtMid;
-            inputPower += fExt0 * v0Mid;
-        }
-
-        // 2B. Implicit Midpoint Solve for Higher Beam Modes m = 1..4
-        for (int m = 1; m < kNumBeamModes; ++m) {
-            if (!modeActive_[m]) continue;
-
-            const double mass = massMode_[m];
-            const double stiff = stiffMode_[m];
-            const double dampRate = dampMode_[m] + damperExtraDamp * 1.6f;
-            const double Rm = mass * dampRate;
-            const double fExt = static_cast<double>(cStrike_[m]) * contactForce;
-
-            const double hk = h * stiff;
-            const double hOverM = h / mass;
-            const double hROverM = h * dampRate;
-            const double eps = hROverM + hk * hOverM;
-
-            const double denom = 1.0 + eps;
-            const double qOld = qBeam_[m];
-            const double pOld = pBeam_[m];
-
-            const double dpMid = (-hk * qOld - eps * pOld + h * fExt) / denom;
-            const double pMid = pOld + dpMid;
-            const double pNew = pOld + 2.0 * dpMid;
-            const double qNew = qOld + (dtD / mass) * pMid;
-
-            qBeam_[m] = qNew;
-            pBeam_[m] = pNew;
-
-            beamEnergy += 0.5 * stiff * qNew * qNew + 0.5 * (pNew * pNew) / mass;
-            const double vMid = pMid / mass;
-            beamDissPower += Rm * vMid * vMid;
-            inputPower += fExt * vMid;
-        }
-
-        // =========================================================================
-        // STEP 3: Integrated Tine & Tone-Bar Tip Excursion and Modal Velocity
-        // =========================================================================
-        const float tbWeight = 0.02f + 0.65f * params[kParamToneBarCoupling];
-        const float wBody = static_cast<float>(qBeam_[0] + tbWeight * qTb_)
-                          + (modeActive_[3] ? cPickup_[3] * static_cast<float>(qBeam_[3]) : 0.0f)
-                          + (modeActive_[4] ? cPickup_[4] * static_cast<float>(qBeam_[4]) : 0.0f);
-
-        // Normalize each mode by its own physical modal frequency omega_m so higher modes
-        // don't blow up by 17.5x in velocity!
-        float vTipNorm = static_cast<float>((pBeam_[0] / massMode_[0]) + tbWeight * (pTb_ / massTb_)) / omegaMode_[0];
-        if (modeActive_[1]) {
-            vTipNorm += cPickup_[1] * static_cast<float>(pBeam_[1] / massMode_[1]) / omegaMode_[1];
-        }
-        if (modeActive_[2]) {
-            vTipNorm += cPickup_[2] * static_cast<float>(pBeam_[2] / massMode_[2]) / omegaMode_[2];
-        }
-        if (modeActive_[3]) {
-            vTipNorm += cPickup_[3] * static_cast<float>(pBeam_[3] / massMode_[3]) / omegaMode_[3];
-        }
-        if (modeActive_[4]) {
-            vTipNorm += cPickup_[4] * static_cast<float>(pBeam_[4] / massMode_[4]) / omegaMode_[4];
-        }
-
-        // =========================================================================
-        // STEP 4: Nonlinear Transducer Pickup (P) via Discrete Gradient
-        // =========================================================================
-        // Air gap d_gap in [0.20 .. 1.25] mm: controls nonlinear bark threshold
-        // Voicing symParam in [0..1]: controls asymmetric 2nd-harmonic bloom vs 3rd-harmonic growl
-        const float distParam = params[kParamPickupDistance];
-        const float dGap = 1.25f - 1.05f * distParam; // [0.20 .. 1.25] mm
-        const float symParam = params[kParamPickupSymmetry];
-        const float asymFactor = 0.05f + 1.45f * symParam;
-
-        float dPhiDw = 1.0f;
-        if (modelType_ == 2) {
-            dPhiDw = evalWurlitzerCapacitanceSensitivity(wBody, asymFactor, dGap);
-        } else {
-            const bool dyno = (modelType_ == 1 || modelType_ == 3);
-            dPhiDw = evalRhodesMagneticFluxSensitivity(wBody, asymFactor, dGap, dyno);
-        }
-
-        // Transduced signal: dPhi/dt = (dPhi/dw) * v_tip with proximity gain
-        const float proximityGain = 0.45f + 0.85f * distParam;
-        const float transducerSignal = dPhiDw * vTipNorm * proximityGain;
-
-        // =========================================================================
-        // STEP 5: Pickup RLC Coil / Capacitive Load Filter (Passive 2-Pole SVF)
-        // =========================================================================
-        // Fully processes the transducer signal through the coil's inductive resonance
-        // and rolls off high-frequency hiss at 12 dB/octave above resonance!
-        const float pickupQParam = params[kParamPickupResonance];
-        const float resFreq = (modelType_ == 1) ? (1900.0f + 3300.0f * pickupQParam)
-                            : (modelType_ == 2) ? (1700.0f + 2900.0f * pickupQParam)
-                                                : (1800.0f + 3100.0f * pickupQParam);
-        const float g = std::tan(kPi * std::min(resFreq, 0.44f * fs_) * dt_);
-        const float kDamp = 1.60f - 1.22f * pickupQParam; // 1.60 (warm vintage roll) to 0.38 (singing Dyno bell resonance)
-        const float a1 = 1.0f / (1.0f + g * (g + kDamp));
-        const float a2 = g * a1;
-        const float a3 = g * a2;
-
-        const float v3 = transducerSignal - coilLPState_;
-        const float v1 = a1 * coilBPState_ + a2 * v3;
-        const float v2 = coilLPState_ + a2 * coilBPState_ + a3 * v3;
-        coilBPState_ = 2.0f * v1 - coilBPState_;
-        coilLPState_ = 2.0f * v2 - coilLPState_;
-
-        // Low-pass + presence bandpass combination
-        float pickupOut = v2 + (0.05f + 0.95f * pickupQParam) * v1;
-
-        // =========================================================================
-        // STEP 6: Mechanical Action Sounds (Thump, Felt Escapement & Damper Tap)
-        // =========================================================================
-        // Authentic dual-component acoustic action sound:
-        // - Deep 110 Hz wood keybed thud (10 ms decay)
-        // - Crisp 920 Hz felt escapement click (3.5 ms decay)
-        // Gated and scaled by thump parameter and strike velocity:
-        const float thumpParam = params[kParamKeyNoise];
-        if (thumpParam > 0.001f && ageSamples_ < static_cast<uint64_t>(0.028f * fs_)) {
-            const float tSec = static_cast<float>(ageSamples_) * dt_;
-            const float thudEnv = std::exp(-tSec / 0.0095f) * std::sin(kTwoPi * 110.0f * tSec);
-            const float clickEnv = std::exp(-tSec / 0.0032f) * std::sin(kTwoPi * 920.0f * tSec);
-            const float thumpAmp = thumpParam * (0.06f + 0.20f * shapedVel_);
-            pickupOut += thumpAmp * (0.75f * thudEnv + 0.35f * clickEnv);
-        }
-
-        // Physical felt damper landing tap on key release:
-        if (releasing_ && thumpParam > 0.001f && releaseAgeSamples_ < static_cast<uint64_t>(0.016f * fs_)) {
-            const float tRel = static_cast<float>(releaseAgeSamples_) * dt_;
-            const float relTap = std::exp(-tRel / 0.0050f) * std::sin(kTwoPi * 380.0f * tRel);
-            pickupOut += thumpParam * 0.035f * relTap;
-            releaseAgeSamples_++;
-        }
-
-        // Apply smooth release envelope and DC blocker
-        pickupOut *= releaseEnv_;
-
-        const float Rdc = 1.0f - (kTwoPi * 20.0f / fs_);
-        const float yDc = pickupOut - dcBlockX1_ + Rdc * dcBlockY1_;
-        dcBlockX1_ = pickupOut;
+        const float yDc = out - dcBlockX1_ + dcBlockR_ * dcBlockY1_;
+        dcBlockX1_ = out;
         dcBlockY1_ = yDc;
-
-        telemetry_.totalHamiltonian = beamEnergy;
-        telemetry_.dissipatedPower = beamDissPower + feltDissPower;
-        telemetry_.inputPower = inputPower;
-        telemetry_.tipDisplacement = wBody;
-        telemetry_.tipVelocity = vTipNorm;
-        telemetry_.hammerCompression = xiPrev_;
         telemetry_.pickupOutput = yDc;
-
-        if (releasing_ && releaseEnv_ < 1e-4f) {
-            active_ = false;
-        } else if (hammerDetached_ && ageSamples_ > 256 && beamEnergy < 1e-9f && std::fabs(yDc) < 1e-6f) {
-            active_ = false;
-        }
-
         return yDc;
     }
 
@@ -634,34 +181,512 @@ public:
     uint64_t getAge() const { return ageSamples_; }
     const VoiceTelemetry& getTelemetry() const { return telemetry_; }
 
-    // Monotonic + asymmetric Port-Hamiltonian magnetic flux sensitivity dPhi/dw:
-    // C-infinity analytic evaluation eliminating finite-difference noise at zero crossings!
-    // - Linear baseline (1.0) preserves clean, crystal-clear fundamental tone f0
-    // - Odd asymmetric term produces warm 2nd-harmonic octave bloom
-    // - Even quadratic term produces punchy 3rd-harmonic Rhodes pickup bark
-    static inline float evalRhodesMagneticFluxSensitivity(float w, float asym, float dGap, bool dynoMode) {
-        const float gap = std::max(0.18f, dGap);
-        const float u = w / gap;
-        const float u2 = u * u;
-        const float a1 = asym * (dynoMode ? 1.65f : 1.25f);
-        const float a2 = (dynoMode ? 1.40f : 0.95f) * (0.35f / gap);
-        return 1.0f + a1 * (u / std::sqrt(1.0f + 0.5f * u2)) + a2 * (u2 / (1.0f + 0.40f * u2));
-    }
-
-    // Wurlitzer 200A polarized electrostatic reed pickup sensitivity dC/dw:
-    // Smooth asymmetric capacitive sensitivity for iconic reedy bite without white noise
-    static inline float evalWurlitzerCapacitanceSensitivity(float w, float asym, float g0) {
-        const float gap = std::max(0.18f, g0);
-        const float u = w / gap;
-        const float u2 = u * u;
-        const float a1 = 0.25f + 1.15f * asym;
-        const float a2 = 0.95f * (0.35f / gap);
-        return 1.0f + a1 * (u / std::sqrt(1.0f + 0.65f * u2)) + a2 * (u2 / (1.0f + 0.50f * u2));
-    }
-
 private:
+    // =========================================================================
+    // Rhodes tine
+    // =========================================================================
+    void noteOnTine(const float* params) {
+        const float touchParam = params[kParamVelocityCurve];
+        const float gamma = 2.70f - 2.25f * touchParam;
+        shapedVel_ = std::pow(velocity_, gamma);
+
+        updateModalParameters(params);
+        lastStrikeParam_ = params[kParamStrikePosition];
+        lastDecayParam_ = params[kParamTineDecay];
+        lastBellParam_ = params[kParamTineBell];
+        lastTbParam_ = params[kParamToneBarCoupling];
+
+        // --- Hammer: mass + nonlinear felt (PyPHS mechanics.felt) ---
+        // H_felt(xi) = k/(alpha+1) * xi^(alpha+1); damper force = lambda * xi^(alpha-1) * dxi/dt
+        const float hardness = params[kParamHammerHardness];
+        const float effHardness = std::clamp(hardness + 0.35f * (shapedVel_ - 0.5f), 0.02f, 0.98f);
+        alphaHammer_ = (modelType_ == 2) ? (2.10f + 0.90f * effHardness) : (1.85f + 0.85f * effHardness);
+        mHammer_ = 1.0;
+
+        // Contact duration: ~2.4 ms (soft) .. ~0.4 ms (hard, bright)
+        const float velStiffening = std::pow(std::max(0.08f, shapedVel_), 0.28f);
+        const float tauContact = ((0.00240f - 0.00198f * effHardness) / velStiffening) * std::pow(0.55f, keyScale_);
+        const float targetTipMm = 0.035f + (0.35f + 0.45f * (1.0f - 0.35f * touchParam)) * shapedVel_;
+        const float totalImpulse = (massMode_[0] * targetTipMm * omegaMode_[0]) / cStrike_[0];
+        const double vHammer0 = totalImpulse / (1.85 * mHammer_);
+        const double xiNom = std::max(1e-4, (tauContact * vHammer0) / 2.94);
+        kHammer_ = ((alphaHammer_ + 1.0) * 0.5 * mHammer_ * vHammer0 * vHammer0) / std::pow(xiNom, alphaHammer_ + 1.0);
+        // Felt loss: Cushion 0 = elastic snap, 1 = heavy felt absorption
+        lambdaHammer_ = (kHammer_ / vHammer0) * (0.02 + 0.75 * params[kParamHammerHysteresis]) * xiNom;
+
+        qBeam_.fill(0.0);
+        pBeam_.fill(0.0);
+        qTb_ = pTb_ = 0.0;
+        // The hammer starts in contact position with its strike momentum
+        qh_ = 0.0;
+        ph_ = mHammer_ * vHammer0;
+        xiPrev_ = 0.0;
+        hammerDetached_ = false;
+    }
+
+    void updateModalParameters(const float* params) {
+        const float xStrike = strikePositionXL(params[kParamStrikePosition]);
+        const float decayParam = params[kParamTineDecay];
+        const float bellParam = params[kParamTineBell];
+        const float toneBarParam = params[kParamToneBarCoupling];
+        const float hardness = params[kParamHammerHardness];
+
+        float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_);
+        if (modelType_ == 2) baseT60 *= 0.68f; // steel-reed voiced tine
+
+        for (int m = 0; m < kNumBeamModes; ++m) {
+            float ratio = kModalFreqRatios[m];
+            if (modelType_ == 2 && m == 1) ratio = 5.45f - 0.30f * toneBarParam;
+            else if (modelType_ == 1 && m == 1) ratio = 6.268f;
+
+            const float fm = f0_ * ratio;
+            if (fm >= 0.44f * fs_) {
+                modeActive_[m] = false;
+                cStrike_[m] = cPickup_[m] = 0.0f;
+                omegaMode_[m] = 100.0f;
+                dampMode_[m] = 1000.0f;
+                massMode_[m] = 1.0f;
+                stiffMode_[m] = 10000.0f;
+                continue;
+            }
+            modeActive_[m] = true;
+            // Pre-warped so the midpoint rule oscillates at exactly fm
+            omegaMode_[m] = 2.0f * fs_ * std::tan(kPi * fm * dt_);
+            const float mEff = 25.0f;
+            massMode_[m] = mEff;
+            stiffMode_[m] = mEff * omegaMode_[m] * omegaMode_[m];
+
+            float modeT60 = baseT60;
+            if (m == 1) modeT60 = (0.025f + 0.60f * bellParam * bellParam) * (0.35f + 0.65f * keyScale_);
+            else if (m == 2) modeT60 = (0.010f + 0.065f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_));
+            else if (m == 3) modeT60 = baseT60 * (0.45f + 0.45f * toneBarParam);
+            else if (m == 4) modeT60 = baseT60 * (0.30f + 0.35f * toneBarParam);
+            dampMode_[m] = 13.81551f / std::max(0.012f, modeT60);
+
+            const float rawShape = evalCantileverModeShape(m, xStrike);
+            if (m == 0) {
+                cStrike_[m] = 0.50f;
+            } else if (m == 1) {
+                const float chimeExcite = bellParam * (0.15f + 0.45f * hardness) * (0.30f + 0.70f * shapedVel_);
+                cStrike_[m] = -chimeExcite * (0.45f + 0.55f * std::fabs(rawShape));
+            } else if (m == 2) {
+                cStrike_[m] = bellParam * (0.08f + 0.25f * hardness) * (0.25f + 0.75f * shapedVel_) * std::fabs(rawShape);
+            } else if (m == 3) {
+                cStrike_[m] = rawShape * (0.02f + 0.38f * toneBarParam) * (0.35f + 0.65f * shapedVel_);
+            } else {
+                cStrike_[m] = rawShape * (0.02f + 0.28f * toneBarParam) * (0.30f + 0.70f * shapedVel_);
+            }
+
+            if (m == 0) {
+                cPickup_[m] = 1.0f;
+            } else if (m == 1) {
+                const float bellAmt = bellParam * ((modelType_ == 2) ? (0.12f + 0.18f * bellParam)
+                                                 : (modelType_ == 1) ? (0.18f + 0.24f * bellParam)
+                                                                     : (0.15f + 0.22f * bellParam));
+                cPickup_[m] = bellAmt * (0.45f + 0.55f * keyScale_);
+            } else if (m == 2) {
+                cPickup_[m] = bellParam * ((modelType_ == 2) ? 0.08f : 0.12f) * (0.40f + 0.60f * keyScale_);
+            } else if (m == 3) {
+                cPickup_[m] = (0.02f + 0.35f * toneBarParam) * (0.3f + 0.7f * shapedVel_);
+            } else {
+                const float h3 = (modelType_ == 2) ? (0.04f + 0.30f * toneBarParam) : (0.02f + 0.25f * toneBarParam);
+                cPickup_[m] = h3 * (0.25f + 0.75f * shapedVel_);
+            }
+        }
+
+        // Tone bar: detuned coupled resonator (0.35 - 1.55 Hz beating)
+        const float detuneHz = 0.35f + 1.20f * toneBarParam;
+        omegaTb_ = 2.0f * fs_ * std::tan(kPi * (f0_ + detuneHz) * dt_);
+        massTb_ = massMode_[0] * 8.0f;
+        stiffTb_ = massTb_ * omegaTb_ * omegaTb_;
+        dampTb_ = dampMode_[0] * (0.70f - 0.30f * toneBarParam);
+        // Coupling stiffness from the wanted shimmer: two oscillators coupled by k_c split by
+        // about k_c / (sqrt(m0 * mt) * omega0) rad/s, so k_c is set from a target beat rate
+        // (0.15 .. 1.05 Hz) rather than as a fixed fraction of the tine stiffness, which split
+        // the fundamental by tens of Hz on every key.
+        const float beatHz = 0.15f + 0.90f * toneBarParam;
+        kCoupleTb_ = kTwoPi * beatHz * std::sqrt(massMode_[0] * massTb_) * omegaMode_[0];
+
+        // An electromagnetic pickup responds to tip velocity (PyPHS: output = f(q) * dq/dt), so every
+        // mode is referred to the fundamental's omega: upper modes keep their natural omega_m/omega_0
+        // emphasis rather than being flattened to displacement.
+        for (int m = 0; m < kNumBeamModes; ++m) {
+            vTipWeight_[m] = modeActive_[m] ? cPickup_[m] * kChimePickupBoost[m] / (massMode_[m] * omegaMode_[0]) : 0.0f;
+        }
+        coeffsDirty_ = true;
+    }
+
+    // Felt storage function and its discrete gradient (PyPHS: grad = 'discret')
+    double feltEnergy(double xi) const {
+        return xi > 0.0 ? kHammer_ / (alphaHammer_ + 1.0) * std::pow(xi, alphaHammer_ + 1.0) : 0.0;
+    }
+    double feltStorageForce(double xiOld, double xiNew) const {
+        const double d = xiNew - xiOld;
+        if (std::fabs(d) < 1e-12) return kHammer_ * std::pow(std::max(0.0, 0.5 * (xiOld + xiNew)), alphaHammer_);
+        return (feltEnergy(xiNew) - feltEnergy(xiOld)) / d;
+    }
+    // Storage (discrete gradient) + felt damper r(xi) * dxi/dt. A felt cannot pull the
+    // tine back, so the total is held at >= 0; the clamped part is extra dissipation.
+    double feltForce(double xiOld, double xiNew) const {
+        const double d = xiNew - xiOld;
+        const double xm = 0.5 * (xiOld + xiNew);
+        const double r = xm > 0.0 ? lambdaHammer_ * std::pow(xm, alphaHammer_ - 1.0) : 0.0;
+        return std::max(0.0, feltStorageForce(xiOld, xiNew) + r * d / dt_);
+    }
+
+    float processTine(const float* params) {
+        if ((ageSamples_ & 63) == 0) {
+            const int newModel = stepIndex(params[kParamModelType], 3);
+            if (newModel != modelType_ || std::fabs(params[kParamStrikePosition] - lastStrikeParam_) > 1e-4f ||
+                std::fabs(params[kParamTineDecay] - lastDecayParam_) > 1e-4f ||
+                std::fabs(params[kParamTineBell] - lastBellParam_) > 1e-4f ||
+                std::fabs(params[kParamToneBarCoupling] - lastTbParam_) > 1e-4f) {
+                modelType_ = newModel;
+                updateModalParameters(params);
+                lastStrikeParam_ = params[kParamStrikePosition];
+                lastDecayParam_ = params[kParamTineDecay];
+                lastBellParam_ = params[kParamTineBell];
+                lastTbParam_ = params[kParamToneBarCoupling];
+            }
+        }
+
+        // Damper felt lands over 12 ms (no note-off clicks)
+        if (releasing_) {
+            damperAmount_ = std::min(1.0f, damperAmount_ + damperStep_);
+            releaseEnv_ *= releaseDecayMul_;
+        } else {
+            damperAmount_ = 0.0f;
+            releaseEnv_ = 1.0f;
+        }
+        const float damperExtraDamp = damperAmount_ * ((modelType_ == 2) ? 75.0f : 55.0f);
+        if (coeffsDirty_ || damperExtraDamp != cachedDamperExtra_) rebuildIntegratorCoefficients(damperExtraDamp);
+
+        const double dtD = static_cast<double>(dt_);
+        const double h = 0.5 * dtD;
+        const CoupledCoeffs& c0 = coupled_;
+
+        // Free (zero-force) predictions of every mode, used by the hammer contact solve
+        const double rhs1Free = -c0.hK00 * qBeam_[0] + c0.hKc * qTb_ - c0.eps11 * pBeam_[0] - c0.a12 * pTb_;
+        const double rhs2 = c0.hKc * qBeam_[0] - c0.hKtt * qTb_ - c0.a21 * pBeam_[0] - c0.eps22 * pTb_;
+
+        // =====================================================================
+        // STEP 1: hammer-beam contact, discrete-gradient implicit solve
+        // The strike point displacement w = sum_m c_m q_m couples to every mode
+        // (PyPHS beams.cantilever transformer chain), so the scheme is passive.
+        // =====================================================================
+        double contactForce = 0.0;
+        double feltDissPower = 0.0;
+        if (!hammerDetached_) {
+            double wNow = 0.0, wFree = 0.0, sens = dtD * dtD / (2.0 * mHammer_);
+            for (int m = 0; m < kNumBeamModes; ++m) {
+                if (!modeActive_[m]) continue;
+                const double cm = cStrike_[m];
+                double qFree, dqdF;
+                if (m == 0) {
+                    const double dpMid = (c0.a22 * rhs1Free - c0.a12 * rhs2) * c0.invDet;
+                    qFree = qBeam_[0] + c0.dtOverM0 * (pBeam_[0] + dpMid);
+                    dqdF = c0.dtOverM0 * c0.a22 * h * cm * c0.invDet;
+                } else {
+                    const ModeCoeffs& mc = modeCoeffs_[m];
+                    const double dpMid = (-mc.hk * qBeam_[m] - mc.eps * pBeam_[m]) * mc.invDenom;
+                    qFree = qBeam_[m] + mc.dtOverM * (pBeam_[m] + dpMid);
+                    dqdF = mc.dtOverM * h * cm * mc.invDenom;
+                }
+                wNow += cm * qBeam_[m];
+                wFree += cm * qFree;
+                sens += cm * dqdF;
+            }
+            const double xiOld = qh_ - wNow;
+            const double xiFree = qh_ + dtD * ph_ / mHammer_ - wFree;
+
+            double xiNew = xiFree;
+            if (xiFree > 0.0 || xiOld > 0.0) {
+                // g(xi) = xi - xiFree + sens * F(xi) is increasing; bracket and solve (Illinois)
+                auto g = [&](double xi) { return xi - xiFree + sens * feltForce(xiOld, xi); };
+                double hi = xiFree, ghi = g(hi);
+                double lo = xiFree - sens * feltForce(xiOld, xiFree) - 1e-12, glo = g(lo);
+                for (int k = 0; k < 8 && glo > 0.0; ++k) { lo -= std::fabs(lo - hi) + 1e-9; glo = g(lo); }
+                xiNew = hi;
+                if (ghi > 0.0 && glo < 0.0) {
+                    int side = 0;
+                    for (int it = 0; it < 60; ++it) {
+                        xiNew = (lo * ghi - hi * glo) / (ghi - glo);
+                        const double gm = g(xiNew);
+                        if (std::fabs(gm) < 1e-15 || std::fabs(hi - lo) < 1e-14) break;
+                        if ((gm > 0.0) == (ghi > 0.0)) { hi = xiNew; ghi = gm; if (side == 1) glo *= 0.5; side = 1; }
+                        else { lo = xiNew; glo = gm; if (side == -1) ghi *= 0.5; side = -1; }
+                    }
+                }
+            }
+            contactForce = feltForce(xiOld, xiNew);
+            // P_diss = (F - F_storage) * dxi/dt >= 0 (felt damper, plus any clamped pull)
+            feltDissPower = (contactForce - feltStorageForce(xiOld, xiNew)) * (xiNew - xiOld) / dtD;
+            const double phOld = ph_;
+            ph_ -= dtD * contactForce;
+            qh_ += dtD * 0.5 * (phOld + ph_) / mHammer_;
+            xiPrev_ = xiNew;
+            if (contactForce <= 0.0 && xiNew <= 0.0 && ph_ <= 0.0 && ageSamples_ > 4) hammerDetached_ = true;
+        }
+
+        // =====================================================================
+        // STEP 2: implicit midpoint step of mode 0 + tone bar and modes 1..4
+        // =====================================================================
+        double beamEnergy = 0.0, beamDissPower = 0.0, inputPower = 0.0;
+        {
+            const double fExt0 = static_cast<double>(cStrike_[0]) * contactForce;
+            const double rhs1 = rhs1Free + h * fExt0;
+            const double dp0Mid = (c0.a22 * rhs1 - c0.a12 * rhs2) * c0.invDet;
+            const double dptMid = (-c0.a21 * rhs1 + c0.a11 * rhs2) * c0.invDet;
+            const double p0Mid = pBeam_[0] + dp0Mid, ptMid = pTb_ + dptMid;
+            const double p0New = pBeam_[0] + 2.0 * dp0Mid, ptNew = pTb_ + 2.0 * dptMid;
+            const double q0New = qBeam_[0] + c0.dtOverM0 * p0Mid, qtNew = qTb_ + c0.dtOverMt * ptMid;
+            qBeam_[0] = q0New; pBeam_[0] = p0New; qTb_ = qtNew; pTb_ = ptNew;
+
+            const double qDiff = q0New - qtNew;
+            beamEnergy += 0.5 * (c0.k0 * q0New * q0New + p0New * p0New * c0.invM0 + c0.kt * qtNew * qtNew +
+                                 ptNew * ptNew * c0.invMt + c0.kc * qDiff * qDiff);
+            const double v0Mid = p0Mid * c0.invM0, vtMid = ptMid * c0.invMt;
+            beamDissPower += c0.R0 * v0Mid * v0Mid + c0.Rt * vtMid * vtMid;
+            inputPower += fExt0 * v0Mid;
+        }
+        for (int m = 1; m < kNumBeamModes; ++m) {
+            if (!modeActive_[m]) continue;
+            const ModeCoeffs& c = modeCoeffs_[m];
+            const double fExt = static_cast<double>(cStrike_[m]) * contactForce;
+            const double dpMid = (-c.hk * qBeam_[m] - c.eps * pBeam_[m] + h * fExt) * c.invDenom;
+            const double pMid = pBeam_[m] + dpMid;
+            pBeam_[m] += 2.0 * dpMid;
+            qBeam_[m] += c.dtOverM * pMid;
+            beamEnergy += 0.5 * (c.stiff * qBeam_[m] * qBeam_[m] + pBeam_[m] * pBeam_[m] * c.invM);
+            const double vMid = pMid * c.invM;
+            beamDissPower += c.R * vMid * vMid;
+            inputPower += fExt * vMid;
+        }
+
+        // =====================================================================
+        // STEP 3: tip excursion and velocity at the pickup
+        // =====================================================================
+        const float tbWeight = 0.02f + 0.65f * params[kParamToneBarCoupling];
+        const float wBody = static_cast<float>(qBeam_[0] + tbWeight * qTb_)
+                          + (modeActive_[3] ? cPickup_[3] * static_cast<float>(qBeam_[3]) : 0.0f)
+                          + (modeActive_[4] ? cPickup_[4] * static_cast<float>(qBeam_[4]) : 0.0f);
+        float vTipNorm = static_cast<float>((pBeam_[0] / massMode_[0]) + tbWeight * (pTb_ / massTb_)) / omegaMode_[0];
+        for (int m = 1; m < kNumBeamModes; ++m) vTipNorm += vTipWeight_[m] * static_cast<float>(pBeam_[m]);
+
+        float out = runPickup(params, wBody, vTipNorm);
+
+        // Mechanical action sounds: 110 Hz keybed thud + 920 Hz escapement click, damper tap on release
+        const float thumpParam = params[kParamKeyNoise];
+        if (thumpParam > 0.001f && ageSamples_ < thumpLenSamples_) {
+            const float tSec = static_cast<float>(ageSamples_) * dt_;
+            const float thud = std::exp(-tSec / 0.0095f) * std::sin(kTwoPi * 110.0f * tSec);
+            const float click = std::exp(-tSec / 0.0032f) * std::sin(kTwoPi * 920.0f * tSec);
+            out += thumpParam * (0.06f + 0.20f * shapedVel_) * (0.75f * thud + 0.35f * click);
+        }
+        if (releasing_ && thumpParam > 0.001f && releaseAgeSamples_ < relTapLenSamples_) {
+            const float tRel = static_cast<float>(releaseAgeSamples_) * dt_;
+            out += thumpParam * 0.035f * std::exp(-tRel / 0.0050f) * std::sin(kTwoPi * 380.0f * tRel);
+            ++releaseAgeSamples_;
+        }
+        out *= releaseEnv_;
+
+        // The free hammer keeps its (constant) kinetic energy after it leaves the tine
+        const double hammerEnergy = 0.5 * ph_ * ph_ / mHammer_ + (hammerDetached_ ? 0.0 : feltEnergy(xiPrev_));
+        telemetry_.totalHamiltonian = beamEnergy + hammerEnergy;
+        telemetry_.dissipatedPower = beamDissPower + feltDissPower;
+        telemetry_.inputPower = inputPower;
+        telemetry_.tipDisplacement = wBody;
+        telemetry_.tipVelocity = vTipNorm;
+        telemetry_.hammerCompression = static_cast<float>(xiPrev_);
+
+        if (releasing_ && releaseEnv_ < 1e-4f) {
+            active_ = false;
+        } else if (hammerDetached_ && ageSamples_ > 256 && beamEnergy < 1e-9 && std::fabs(out) < 1e-6f) {
+            active_ = false;
+        }
+        return out;
+    }
+
+    // =========================================================================
+    // Wurlitzer reed (OpenWurli)
+    // =========================================================================
+    void noteOnReed(const float* params) {
+        // Touch at its centre (0.5) leaves OpenWurli's velocity response untouched
+        const double gamma = std::pow(2.0, (0.5 - params[kParamVelocityCurve]) * 2.0);
+        const double vel = std::pow(static_cast<double>(velocity_), gamma);
+        shapedVel_ = static_cast<float>(vel);
+        wurli::ReedVoicing v;
+        // Every control sits at OpenWurli's calibration when at its default position
+        v.decayScale = std::pow(2.0, -(params[kParamTineDecay] - 0.65) * 4.0);
+        v.overtoneScale = std::pow(2.0, (params[kParamTineBell] - 0.55) * 5.0);
+        v.noiseScale = std::clamp(params[kParamKeyNoise] / 0.30, 0.0, 3.5);
+        v.damperScale = std::pow(2.0, (params[kParamHammerHysteresis] - 0.35) * 2.0);
+        v.dwellVelocityOffset = (params[kParamHammerHardness] - 0.48) * 0.8;
+        v.tipMassOffset = (params[kParamToneBarCoupling] - 0.55) * 0.12;
+        noiseSeed_ = noiseSeed_ * 1664525u + 1013904223u + static_cast<uint32_t>(midiNote_);
+        reed_.noteOn(midiNote_, vel, fs_, noiseSeed_, v);
+    }
+
+    float processReed(const float* params) {
+        if (releasing_ && !reedDamperStarted_) {
+            reed_.noteOff();
+            reedDamperStarted_ = true;
+        }
+        const double disp = reed_.next();       // 1.0 = the note's ff swing at the pickup
+        const double xMm = disp * reed_.swingMm();
+        const double vNorm = (xMm - xPrevMm_) * fs_ / (wurli::kTau * reed_.fundamentalHz());
+        xPrevMm_ = xMm;
+
+        float out = runPickup(params, static_cast<float>(xMm), static_cast<float>(vNorm));
+
+        const double env = reed_.envelope();
+        telemetry_.totalHamiltonian = env * env;
+        telemetry_.dissipatedPower = 0.0;
+        telemetry_.inputPower = 0.0;
+        telemetry_.tipDisplacement = static_cast<float>(xMm);
+        telemetry_.tipVelocity = static_cast<float>(vNorm);
+        telemetry_.hammerCompression = 0.0f;
+        if (reed_.isSilent()) active_ = false;
+        return out;
+    }
+
+    // =========================================================================
+    // Pickups. tipMm: displacement at the pickup (mm); vNorm: velocity / omega0 (mm)
+    // =========================================================================
+    float runPickup(const float* params, float tipMm, float vNorm) {
+        if (pickup_ == Pickup::Electrostatic) {
+            const double swing = electrostaticSwingScale(params[kParamPickupDistance]);
+            double volts;
+            if (resonator_ == Resonator::Reed) {
+                volts = esPickup_.process(tipMm / reed_.swingMm() * swing) * reed_.outputScale();
+            } else {
+                // A tine's few tenths of a mm against the comb: bandSign orients it like a reed
+                volts = esPickup_.processPenetration(esPickup_.bandSign() * tipMm * swing - esPickup_.restOffsetMm()) * kTineElectrostaticGain;
+            }
+            return static_cast<float>(volts * kVoiceUnitsPerVolt);
+        }
+
+        // --- Electromagnetic: Falaize & Helie eq. (25) ---
+        const float gapKey = params[kParamPickupDistance] * 7.0f + params[kParamPickupSymmetry] * 131.0f + modelType_;
+        if (gapKey != geomKey_) {
+            geomKey_ = gapKey;
+            const bool dyno = (modelType_ == 1 || modelType_ == 3);
+            emLh_ = magneticGapMm(params[kParamPickupDistance]) * 1e-3 * (dyno ? 0.85 : 1.0);
+            emLv_ = magneticOffsetMm(params[kParamPickupSymmetry]) * 1e-3;
+            emRp_ = (dyno ? 1.2 : 1.0) * 1e-3;
+            // Level reference: small-signal fundamental and octave sensitivities. Half of the
+            // geometry's level change is kept (it is physical), half is normalised away.
+            static const double refDefault = magneticLevelRef(magneticGapMm(0.5f) * 1e-3, magneticOffsetMm(0.4f) * 1e-3, 1e-3);
+            emNorm_ = -1.0 / std::sqrt(magneticLevelRef(emLh_, emLv_, emRp_) * refDefault);
+        }
+        const double sens = falaizeHeliePickupSensitivity(static_cast<double>(tipMm) * 1e-3, kRb, emRp_, emLh_, emLv_);
+        const float transducerSignal = static_cast<float>(sens * emNorm_) * vNorm * kMagneticGain
+                                     * (resonator_ == Resonator::Reed ? kReedMagneticGain : 1.0f);
+
+        // Coil RLC resonance (2-pole SVF): low-pass with a resonant presence peak
+        const float pickupQParam = params[kParamPickupResonance];
+        if (pickupQParam != coilQParam_ || modelType_ != coilModel_) {
+            const float resFreq = (modelType_ == 1) ? (1900.0f + 3300.0f * pickupQParam)
+                                : (modelType_ == 2) ? (1700.0f + 2900.0f * pickupQParam)
+                                                    : (1800.0f + 3100.0f * pickupQParam);
+            const float g = std::tan(kPi * std::min(resFreq, 0.44f * fs_) * dt_);
+            const float kDamp = 1.60f - 1.22f * pickupQParam;
+            coilA1_ = 1.0f / (1.0f + g * (g + kDamp));
+            coilA2_ = g * coilA1_;
+            coilA3_ = g * coilA2_;
+            coilQParam_ = pickupQParam;
+            coilModel_ = modelType_;
+        }
+        const float v3 = transducerSignal - coilLPState_;
+        const float v1 = coilA1_ * coilBPState_ + coilA2_ * v3;
+        const float v2 = coilLPState_ + coilA2_ * coilBPState_ + coilA3_ * v3;
+        coilBPState_ = 2.0f * v1 - coilBPState_;
+        coilLPState_ = 2.0f * v2 - coilLPState_;
+        return v2 + (0.05f + 0.95f * pickupQParam) * v1;
+    }
+
+    static double magneticLevelRef(double lh, double lv, double rp) {
+        const double f0 = falaizeHeliePickupSensitivity(0.0, kRb, rp, lh, lv);
+        const double d = 1e-6;
+        const double f1 = (falaizeHeliePickupSensitivity(d, kRb, rp, lh, lv) -
+                           falaizeHeliePickupSensitivity(-d, kRb, rp, lh, lv)) / (2.0 * d) * 0.3e-3;
+        return std::sqrt(f0 * f0 + f1 * f1);
+    }
+
+    // =========================================================================
+    // Cached implicit-midpoint coefficients (rebuilt only when parameters or the damper move)
+    // =========================================================================
+    struct CoupledCoeffs {
+        double k0, kc, kt, hK00, hKc, hKtt;
+        double eps11, eps22, a11, a12, a21, a22, invDet;
+        double invM0, invMt, dtOverM0, dtOverMt, R0, Rt;
+    };
+    struct ModeCoeffs {
+        double stiff, hk, eps, invDenom, invM, dtOverM, R;
+    };
+
+    void rebuildIntegratorCoefficients(float damperExtraDamp) {
+        const double dtD = static_cast<double>(dt_);
+        const double h = 0.5 * dtD;
+        const double h2 = h * h;
+
+        CoupledCoeffs& c = coupled_;
+        const double m0 = massMode_[0];
+        const double mt = massTb_;
+        c.kc = kCoupleTb_;
+        c.k0 = std::max(0.5f * stiffMode_[0], stiffMode_[0] - kCoupleTb_);
+        c.kt = stiffTb_;
+        const double d0 = dampMode_[0] + damperExtraDamp;
+        const double dtb = dampTb_ + damperExtraDamp * 0.9f;
+        c.R0 = m0 * d0;
+        c.Rt = mt * dtb;
+        c.hK00 = h * (c.k0 + c.kc);
+        c.hKc = h * c.kc;
+        c.hKtt = h * (c.kt + c.kc);
+        c.eps11 = h * d0 + h2 * (c.k0 + c.kc) / m0;
+        c.eps22 = h * dtb + h2 * (c.kt + c.kc) / mt;
+        c.a11 = 1.0 + c.eps11;
+        c.a12 = -h2 * c.kc / mt;
+        c.a21 = -h2 * c.kc / m0;
+        c.a22 = 1.0 + c.eps22;
+        c.invDet = 1.0 / (c.a11 * c.a22 - c.a12 * c.a21);
+        c.invM0 = 1.0 / m0;
+        c.invMt = 1.0 / mt;
+        c.dtOverM0 = dtD / m0;
+        c.dtOverMt = dtD / mt;
+
+        for (int m = 1; m < kNumBeamModes; ++m) {
+            ModeCoeffs& mc = modeCoeffs_[m];
+            const double mass = massMode_[m];
+            const double dampRate = dampMode_[m] + damperExtraDamp * 1.6f;
+            mc.stiff = stiffMode_[m];
+            mc.hk = h * mc.stiff;
+            mc.eps = h * dampRate + mc.hk * (h / mass);
+            mc.invDenom = 1.0 / (1.0 + mc.eps);
+            mc.invM = 1.0 / mass;
+            mc.dtOverM = dtD / mass;
+            mc.R = mass * dampRate;
+        }
+        cachedDamperExtra_ = damperExtraDamp;
+        coeffsDirty_ = false;
+    }
+
+    // Pickup geometry (PyPHS transducers.pickup defaults: Rb = Rp = 1 mm)
+    static constexpr double kRb = 1.0e-3;
+    static constexpr float kMagneticGain = 1.0f;
+    static constexpr double kTineElectrostaticGain = 0.043;
+    static constexpr float kReedMagneticGain = 0.43f;
+
     float fs_ = 48000.0f;
     float dt_ = 1.0f / 48000.0f;
+    float releaseDecayMul_ = 1.0f;
+    float damperStep_ = 0.0f;
+    float dcBlockR_ = 0.997f;
+    uint64_t thumpLenSamples_ = 0;
+    uint64_t relTapLenSamples_ = 0;
+
+    Resonator resonator_ = Resonator::Tine;
+    Pickup pickup_ = Pickup::Magnetic;
 
     bool active_ = false;
     bool releasing_ = false;
@@ -681,19 +706,18 @@ private:
     float lastDecayParam_ = -1.0f;
     float lastBellParam_ = -1.0f;
     float lastTbParam_ = -1.0f;
-    float lastKeyNoiseParam_ = 0.25f;
 
-    // Port-Hamiltonian Hammer (H) states & parameters
-    float mHammer_ = 1.0f;
-    float kHammer_ = 1.0e7f;
-    float alphaHammer_ = 2.1f;
-    float lambdaHammer_ = 100.0f;
-    float qh_ = 0.0f;
-    float ph_ = 0.0f;
-    float xiPrev_ = 0.0f;
+    // Hammer (H): mass + felt
+    double mHammer_ = 1.0;
+    double kHammer_ = 1.0e7;
+    double alphaHammer_ = 2.1;
+    double lambdaHammer_ = 100.0;
+    double qh_ = 0.0;
+    double ph_ = 0.0;
+    double xiPrev_ = 0.0;
     bool hammerDetached_ = true;
 
-    // Port-Hamiltonian Cantilever Beam (B) modal states & parameters
+    // Beam (B) modes
     std::array<bool, kNumBeamModes> modeActive_{};
     std::array<double, kNumBeamModes> qBeam_{};
     std::array<double, kNumBeamModes> pBeam_{};
@@ -704,7 +728,7 @@ private:
     std::array<float, kNumBeamModes> cStrike_{};
     std::array<float, kNumBeamModes> cPickup_{};
 
-    // Coupled Tone-Bar (T) state & parameters
+    // Tone bar (T)
     double qTb_ = 0.0;
     double pTb_ = 0.0;
     float omegaTb_ = 440.0f;
@@ -713,8 +737,25 @@ private:
     float dampTb_ = 1.0f;
     float kCoupleTb_ = 10.0f;
 
-    // Pickup (P) state
-    float wBodyPrev_ = 0.0f;
+    bool coeffsDirty_ = true;
+    float cachedDamperExtra_ = -1.0f;
+    CoupledCoeffs coupled_{};
+    std::array<ModeCoeffs, kNumBeamModes> modeCoeffs_{};
+    std::array<float, kNumBeamModes> vTipWeight_{};
+
+    // Reed
+    wurli::ReedExciter reed_;
+    bool reedDamperStarted_ = false;
+    double xPrevMm_ = 0.0;
+    uint32_t noiseSeed_ = 0x9E3779B9u;
+
+    // Pickups
+    wurli::ElectrostaticPickup esPickup_;
+    float geomKey_ = -1.0f;
+    double emLh_ = 1e-3, emLv_ = 0.5e-3, emRp_ = 1e-3, emNorm_ = 1.0;
+    float coilQParam_ = -1.0f;
+    int coilModel_ = -1;
+    float coilA1_ = 0.0f, coilA2_ = 0.0f, coilA3_ = 0.0f;
     float coilLPState_ = 0.0f;
     float coilBPState_ = 0.0f;
     float dcBlockX1_ = 0.0f;

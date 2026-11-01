@@ -19,6 +19,31 @@ using char8 = char;
 using char16 = char16_t;
 using TUID = uint8[16];
 
+// Windows VST3 is COM-compatible: __stdcall, COM HRESULT codes and COM GUID byte order
+// (as COM_COMPATIBLE in the Steinberg SDK). Other platforms use the plain layout.
+#if defined(_WIN32)
+#define SMTG_API __stdcall
+static constexpr tresult kNoInterface = static_cast<tresult>(0x80004002L);
+static constexpr tresult kResultOk = 0;
+static constexpr tresult kResultTrue = kResultOk;
+static constexpr tresult kResultFalse = 1;
+static constexpr tresult kInvalidArgument = static_cast<tresult>(0x80070057L);
+static constexpr tresult kNotImplemented = static_cast<tresult>(0x80004001L);
+static constexpr tresult kInternalError = static_cast<tresult>(0x80004005L);
+static constexpr tresult kNotInitialized = static_cast<tresult>(0x8000FFFFL);
+static constexpr tresult kOutOfMemory = static_cast<tresult>(0x8007000EL);
+#define INLINE_UID(l1, l2, l3, l4) \
+{ \
+    (uint8)(((uint32)(l1) & 0x000000FF)      ), (uint8)(((uint32)(l1) & 0x0000FF00) >>  8), \
+    (uint8)(((uint32)(l1) & 0x00FF0000) >> 16), (uint8)(((uint32)(l1) & 0xFF000000) >> 24), \
+    (uint8)(((uint32)(l2) & 0x00FF0000) >> 16), (uint8)(((uint32)(l2) & 0xFF000000) >> 24), \
+    (uint8)(((uint32)(l2) & 0x000000FF)      ), (uint8)(((uint32)(l2) & 0x0000FF00) >>  8), \
+    (uint8)(((uint32)(l3) & 0xFF000000) >> 24), (uint8)(((uint32)(l3) & 0x00FF0000) >> 16), \
+    (uint8)(((uint32)(l3) & 0x0000FF00) >>  8), (uint8)(((uint32)(l3) & 0x000000FF)      ), \
+    (uint8)(((uint32)(l4) & 0xFF000000) >> 24), (uint8)(((uint32)(l4) & 0x00FF0000) >> 16), \
+    (uint8)(((uint32)(l4) & 0x0000FF00) >>  8), (uint8)(((uint32)(l4) & 0x000000FF)      )  \
+}
+#else
 #define SMTG_API
 
 static constexpr tresult kNoInterface = -1;
@@ -42,6 +67,7 @@ static constexpr tresult kOutOfMemory = 6;
     (uint8)(((uint32)(l4) & 0xFF000000) >> 24), (uint8)(((uint32)(l4) & 0x00FF0000) >> 16), \
     (uint8)(((uint32)(l4) & 0x0000FF00) >>  8), (uint8)(((uint32)(l4) & 0x000000FF)      )  \
 }
+#endif
 
 inline bool iidEqual(const TUID a, const TUID b) {
     return std::memcmp(a, b, 16) == 0;

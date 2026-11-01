@@ -1,8 +1,10 @@
 #include "../src/dsp/PhsSynthEngine.hpp"
 #include "../include/clap/clap.h"
 #include "../include/vst3/vst3_c_api.h"
+#if defined(__APPLE__)
 #include <AudioUnit/AudioUnit.h>
 #include <dlfcn.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -10,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <cassert>
+#include <filesystem>
 
 namespace {
 
@@ -63,13 +66,13 @@ bool verifyPhsPassivity() {
 
     float params[phs::kNumParams];
     for (uint32_t i = 0; i < phs::kNumParams; ++i) {
-        params[i] = phs::kFactoryPresets[0].values[i];
+        params[i] = phs::kExpandedFactoryPresets[0].values[i];
     }
 
     // Strike middle C4 (MIDI 60) at fortissimo velocity (0.95)
     voice.noteOn(60, 0.95f, params);
 
-    float prevH = 0.0f;
+    double prevH = 0.0;
     float maxEnergyResidual = 0.0f;
     int nonPassiveViolations = 0;
     float peakOut = 0.0f;
@@ -89,17 +92,16 @@ bool verifyPhsPassivity() {
             ++contactSamples;
         }
 
-        // After hammer detachment (t > 5ms = 240 samples), external power P_in == 0,
-        // so dH/dt + P_diss == 0 strictly!
-        if (n > 240 && tel.inputPower == 0.0f && tel.hammerCompression == 0.0f) {
+        // H includes the hammer and felt, so the closed system obeys the discrete power
+        // balance dH/dt + P_diss == 0 on EVERY sample, through contact and separation
+        // (discrete-gradient scheme). Residual is measured against the stored energy.
+        if (n > 0) {
             const double dH = tel.totalHamiltonian - prevH;
-            if (dH > 1e-4) {
+            if (dH > 1e-9 * std::max(1e-30, prevH)) {
                 ++nonPassiveViolations;
             }
-            const double powerBalanceResidual = std::fabs((dH / dt) + tel.dissipatedPower) / std::max(1.0, tel.dissipatedPower);
-            if (n > 300) {
-                maxEnergyResidual = std::max(maxEnergyResidual, static_cast<float>(powerBalanceResidual));
-            }
+            const double residual = std::fabs(dH + dt * tel.dissipatedPower) / std::max(1e-30, prevH);
+            maxEnergyResidual = std::max(maxEnergyResidual, static_cast<float>(residual));
         }
         prevH = tel.totalHamiltonian;
     }
@@ -132,9 +134,11 @@ bool verifyPhsPassivity() {
                 fundDb, harm2Db, harm3Db, chimeDb, subBassDb);
     std::printf("  -> Post-impact non-passive violations: %d | Max relative power residual: %.2e\n",
                 nonPassiveViolations, maxEnergyResidual);
-    return (nonPassiveViolations == 0 && peakOut > 0.15f && peakOut < 4.0f && (fundDb - subBassDb) > 25.0);
+    return (nonPassiveViolations == 0 && maxEnergyResidual < 1e-6f && peakOut > 0.15f && peakOut < 4.0f &&
+            (fundDb - subBassDb) > 25.0);
 }
 
+#if defined(__APPLE__)
 // 2. Test compiled CLAP bundle via dlopen
 bool testClapBundle(const char* dylibPath) {
     std::printf("[TEST 2] Testing CLAP Bundle (%s)...\n", dylibPath);
@@ -392,8 +396,12 @@ bool testAuBundle(const char* dylibPath) {
 }
 
 // 5. Render musical showcase WAV files for Rhodes Mk I, Wurlitzer 200A, and Dyno-My-Piano
+#endif // __APPLE__
+
 void renderShowcaseDemos() {
     std::printf("[TEST 5] Rendering Showcase Audio Demos (48 kHz Stereo WAV)...\n");
+    std::error_code ec;
+    std::filesystem::create_directories("renders", ec);
     const uint32_t sr = 48000;
     const int totalSeconds = 6;
     const size_t totalFrames = sr * totalSeconds;
@@ -403,10 +411,15 @@ void renderShowcaseDemos() {
         const char* filename;
     };
 
-    const DemoSpec specs[3] = {
+    const DemoSpec specs[] = {
         {0, "renders/rhodes_mk1_suitcase.wav"},
-        {1, "renders/wurlitzer_200a_bark.wav"},
-        {2, "renders/dyno_80s_chorus_bell.wav"}
+        {8, "renders/wurlitzer_200a_openwurli.wav"},
+        {11, "renders/wurlitzer_200a_cranked.wav"},
+        {15, "renders/dyno_la_bell.wav"},
+        {19, "renders/hybrid_tine_into_200a.wav"},
+        {20, "renders/hybrid_reed_into_suitcase.wav"},
+        {23, "renders/mutron_funk.wav"},
+        {25, "renders/ambient_tine_pad.wav"}
     };
 
     for (const auto& sp : specs) {
@@ -461,7 +474,7 @@ void renderShowcaseDemos() {
         writeStereoWav(sp.filename, bufL, bufR, sr);
         std::printf("  -> Wrote %s (preset: \"%s\", peak: %.3f)\n",
                     sp.filename,
-                    phs::kFactoryPresets[sp.presetIdx].name,
+                    phs::kExpandedFactoryPresets[sp.presetIdx].name.c_str(),
                     peak);
     }
 }
@@ -471,9 +484,12 @@ void renderShowcaseDemos() {
 int main() {
     bool ok = true;
     ok &= verifyPhsPassivity();
+#if defined(__APPLE__)
+    // Plugin-bundle load tests use the macOS bundle layout
     ok &= testClapBundle("build/electropiano.clap/Contents/MacOS/electropiano");
     ok &= testVst3Bundle("build/electropiano.vst3/Contents/MacOS/electropiano");
     ok &= testAuBundle("build/electropiano.component/Contents/MacOS/electropiano");
+#endif
     renderShowcaseDemos();
 
     if (ok) {

@@ -1,5 +1,7 @@
 CXX := clang++
-CXXFLAGS := -std=c++17 -O3 -ffast-math -Wall -Wextra -fPIC -fvisibility=hidden
+# ARCHFLAGS: e.g. make ARCHFLAGS="-arch arm64 -arch x86_64" for universal binaries
+ARCHFLAGS ?=
+CXXFLAGS := -std=c++17 -O3 -ffast-math -Wall -Wextra -fPIC -fvisibility=hidden $(ARCHFLAGS)
 OBJCXXFLAGS := $(CXXFLAGS) -ObjC++ -fno-objc-arc
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework AudioUnit -framework AudioToolbox -framework CoreAudio -framework CoreMIDI -framework CoreFoundation
 
@@ -12,9 +14,11 @@ AU_BUNDLE   := $(BUILD_DIR)/$(PLUGIN_NAME).component
 APP_BUNDLE  := $(BUILD_DIR)/$(PLUGIN_NAME).app
 TEST_BIN    := $(BUILD_DIR)/test_phs_piano
 
-DSP_HEADERS := src/dsp/PhsParameters.hpp src/dsp/PhsVoice.hpp src/dsp/PhsEffects.hpp src/dsp/PhsSynthEngine.hpp
-GUI_SOURCES := src/gui/PhsCocoaView.mm
-GUI_HEADERS := src/gui/PhsCocoaView.h
+DSP_HEADERS := src/dsp/PhsParameters.hpp src/dsp/PhsVoice.hpp src/dsp/PhsEffects.hpp src/dsp/PhsSynthEngine.hpp \
+               src/dsp/PhsPresetManager.hpp src/dsp/wurli/WurliVoice.hpp src/dsp/wurli/WurliAmp.hpp \
+               src/dsp/wurli/WurliPickupTables.hpp
+GUI_SOURCES := src/gui/PhsCocoaView.mm src/gui/PhsEditor.cpp
+GUI_HEADERS := src/gui/PhsCocoaView.h src/gui/PhsEditor.hpp src/gui/PhsCanvas.hpp
 
 .PHONY: all clap vst3 au app test install clean
 
@@ -37,8 +41,8 @@ clap: src/formats/clap_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.clap</string>' \
 		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>0.77</string>' \
+		'  <key>CFBundleVersion</key><string>0.77</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(CLAP_BUNDLE)/Contents/Info.plist"
@@ -62,8 +66,8 @@ vst3: src/formats/vst3_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.vst3</string>' \
 		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>0.77</string>' \
+		'  <key>CFBundleVersion</key><string>0.77</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(VST3_BUNDLE)/Contents/Info.plist"
@@ -87,8 +91,8 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.audiounit</string>' \
 		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>0.77</string>' \
+		'  <key>CFBundleVersion</key><string>0.77</string>' \
 		'  <key>AudioComponents</key>' \
 		'  <array>' \
 		'    <dict>' \
@@ -98,7 +102,7 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'      <key>manufacturer</key><string>mtya</string>' \
 		'      <key>subtype</key><string>ePno</string>' \
 		'      <key>type</key><string>aumu</string>' \
-		'      <key>version</key><integer>66048</integer>' \
+		'      <key>version</key><integer>19712</integer>' \
 		'      <key>sandboxSafe</key><true/>' \
 		'    </dict>' \
 		'  </array>' \
@@ -124,8 +128,8 @@ app: src/formats/standalone_app.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'  <key>CFBundleIdentifier</key><string>com.mtyas.electropiano.standalone</string>' \
 		'  <key>CFBundleName</key><string>electropiano</string>' \
 		'  <key>CFBundlePackageType</key><string>APPL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.2.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.2.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>0.77</string>' \
+		'  <key>CFBundleVersion</key><string>0.77</string>' \
 		'  <key>NSHighResolutionCapable</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(APP_BUNDLE)/Contents/Info.plist"
@@ -137,8 +141,14 @@ $(TEST_BIN): tools/test_phs_piano.cpp $(DSP_HEADERS) include/clap/clap.h include
 	@mkdir -p $(BUILD_DIR) renders
 	$(CXX) $(CXXFLAGS) tools/test_phs_piano.cpp $(FRAMEWORKS) -o $(TEST_BIN)
 
-test: all
+test: all build/test_wurli_port
+	./build/test_wurli_port
 	./$(TEST_BIN)
+
+# OpenWurli port verification against upstream's SPICE-derived acceptance targets
+build/test_wurli_port: tools/test_wurli_port.cpp $(DSP_HEADERS)
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) tools/test_wurli_port.cpp -o build/test_wurli_port
 
 install: all
 	@mkdir -p "$$HOME/Library/Audio/Plug-Ins/CLAP"

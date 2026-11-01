@@ -33,7 +33,7 @@ static const clap_plugin_descriptor_t kClapDescriptor = {
     "https://mtyas.com",
     "https://mtyas.com",
     "https://ko-fi.com/mtyas",
-    "1.2.0",
+    "0.77",
     "electropiano by mtyas - Port-Hamiltonian Rhodes & Wurlitzer Physical Model",
     kClapFeatures
 };
@@ -189,7 +189,9 @@ static bool CLAP_ABI paramsGetInfo(const clap_plugin_t *,
     const auto &meta = phs::kParamMetadata[param_index];
     std::memset(info, 0, sizeof(*info));
     info->id = meta.id;
-    info->flags = CLAP_PARAM_IS_AUTOMATABLE | (meta.isStepped ? CLAP_PARAM_IS_STEPPED : 0);
+    // Values are exchanged normalised (0..1), so choice parameters are not flagged
+    // CLAP_PARAM_IS_STEPPED (which would restrict them to the integers 0 and 1).
+    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
     info->cookie = nullptr;
     std::snprintf(info->name, sizeof(info->name), "%s", meta.name);
     std::snprintf(info->module, sizeof(info->module), "%s", meta.category);

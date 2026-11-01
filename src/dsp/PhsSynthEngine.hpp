@@ -426,7 +426,7 @@ public:
 
             float left = 0.0f;
             float right = 0.0f;
-            effects_.processStereoSample(voiceSum * 0.32f, smoothedParams_.data(), modWheel_, left, right);
+            effects_.processStereoSample(voiceSum * kVoiceMixGain, smoothedParams_.data(), modWheel_, left, right);
 
             if (outL) outL[s] = left;
             if (outR) outR[s] = right;
@@ -472,7 +472,7 @@ public:
     // Binary state serialization for VST3 / CLAP / AU
     struct SerializedState {
         uint32_t magic = 0x50485345; // 'PHSE'
-        uint32_t version = 2;
+        uint32_t version = 3;
         int32_t presetIdx = 0;
         float params[kNumParams]{};
         int8_t midiCc[kNumParams]{};
@@ -481,7 +481,7 @@ public:
 
     void getState(SerializedState& out) const {
         out.magic = 0x50485345;
-        out.version = 2;
+        out.version = 3;
         out.presetIdx = currentPreset_.load(std::memory_order_relaxed);
         for (uint32_t i = 0; i < kNumParams; ++i) {
             out.params[i] = targetParams_[i].load(std::memory_order_relaxed);
@@ -491,7 +491,7 @@ public:
     }
 
     bool setState(const void* data, size_t size) {
-        if (!data || size < sizeof(uint32_t) * 3 + sizeof(float) * kNumParams) return false;
+        if (!data || size < sizeof(uint32_t) * 3) return false;
         const auto* header = static_cast<const uint32_t*>(data);
         if (header[0] != 0x50485345) return false;
 
@@ -499,14 +499,25 @@ public:
         const int32_t pIdx = static_cast<const int32_t*>(static_cast<const void*>(header + 2))[0];
         currentPreset_.store(std::clamp(pIdx, 0, presetManager_.getPresetCount() - 1), std::memory_order_relaxed);
 
+        // Version 2 states carried 23 parameters; later ones keep their defaults
+        const uint32_t storedParams = ver >= 3 ? kNumParams : kNumParamsV2;
+        if (size < sizeof(uint32_t) * 3 + sizeof(float) * storedParams) return false;
         const float* pData = reinterpret_cast<const float*>(header + 3);
         for (uint32_t i = 0; i < kNumParams; ++i) {
-            const float v = std::isfinite(pData[i]) ? std::clamp(pData[i], 0.0f, 1.0f) : kParamMetadata[i].defaultValue;
+            float v = kParamMetadata[i].defaultValue;
+            if (i < storedParams && std::isfinite(pData[i])) v = std::clamp(pData[i], 0.0f, 1.0f);
             targetParams_[i].store(v, std::memory_order_relaxed);
             smoothedParams_[i] = v;
         }
+        if (ver < 3) {
+            // A v2 state's Model choice implied its stages
+            const int model = stepIndex(targetParams_[kParamModelType].load(std::memory_order_relaxed), 3);
+            targetParams_[kParamResonator].store(model == 2 ? 1.0f : 0.0f, std::memory_order_relaxed);
+            targetParams_[kParamPickupType].store(model == 2 ? 1.0f : 0.0f, std::memory_order_relaxed);
+            targetParams_[kParamAmpType].store(model == 2 ? 1.0f : 0.0f, std::memory_order_relaxed);
+        }
 
-        if (ver >= 2 && size >= sizeof(SerializedState)) {
+        if (ver >= 3 && size >= sizeof(SerializedState)) {
             const auto* st = static_cast<const SerializedState*>(data);
             for (int i = 0; i < 128; ++i) {
                 ccToParam_[i].store(-1, std::memory_order_relaxed);

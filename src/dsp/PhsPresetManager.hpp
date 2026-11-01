@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <cstdlib>
+#include <initializer_list>
 
 namespace phs {
 
@@ -45,228 +46,159 @@ struct PresetItem {
     std::array<float, kNumParams> values{};
 };
 
-// 16 Authentic Factory Presets across all categories
-static const std::vector<PresetItem> kExpandedFactoryPresets = {
-    // --- Rhodes Vintage ---
-    {
-        "1973 Suitcase Rhodes Mk I",
-        PresetCategory::RhodesVintage,
-        "mtyas",
-        "Classic 1973 Suitcase with stereo auto-pan vibrato, warm tone-bar sustain, and gentle pickup bark on hard accents.",
-        false, false, "",
-        {{
-            0.0f,  // Model: Rhodes Mk I
-            0.48f, // Hammer Hardness
-            0.35f, // Hammer Hysteresis
-            0.18f, // Strike Position
-            0.68f, // Tine Decay
-            0.45f, // Tine Bell
-            0.58f, // ToneBar Coupling
-            0.28f, // Key Noise
-            0.54f, // Pickup Distance
-            0.38f, // Pickup Symmetry
-            0.45f, // Coil Resonance
-            0.32f, // Preamp Drive
-            0.58f, // Bass Boost
-            0.52f, // Treble Boost
-            0.42f, // Tremolo Depth
-            0.40f, // Tremolo Rate
-            0.00f, // Phaser Mix
-            0.25f, // Phaser Rate
-            0.00f, // Chorus Mix
-            0.22f, // Reverb Mix
-            0.45f, // Reverb Decay
-            0.50f, // Velocity Curve
-            0.82f  // Master Volume
-        }}
-    },
-    {
-        "1977 Stage Piano (Clean DI)",
-        PresetCategory::RhodesVintage,
-        "mtyas",
-        "Pure direct injection passive Stage Mk I. Bell tone up front with natural woody decay and acoustic hammer felt.",
-        false, false, "",
-        {{
-            0.0f,  0.42f, 0.40f, 0.20f, 0.65f, 0.40f, 0.52f, 0.35f,
-            0.48f, 0.35f, 0.40f, 0.18f, 0.50f, 0.50f, 0.00f, 0.25f,
-            0.00f, 0.25f, 0.00f, 0.12f, 0.32f, 0.50f, 0.85f
-        }}
-    },
-    {
-        "1971 Silver Top Sparkle",
-        PresetCategory::RhodesVintage,
-        "mtyas",
-        "Early teardrop felt hammer with distinctive percussive chime and slightly loose tone-bar resonance.",
-        false, false, "",
-        {{
-            0.0f,  0.55f, 0.32f, 0.16f, 0.70f, 0.56f, 0.62f, 0.32f,
-            0.58f, 0.42f, 0.50f, 0.38f, 0.55f, 0.60f, 0.28f, 0.45f,
-            0.00f, 0.25f, 0.00f, 0.26f, 0.50f, 0.52f, 0.80f
-        }}
-    },
-    {
-        "Herbie Funk 1974 Wah-Pan",
-        PresetCategory::RhodesVintage,
-        "mtyas",
-        "Hot preamp driving a sweeping 4-stage optical phaser with wide stereo tremolo for Head Hunters funk grooves.",
-        false, false, "",
-        {{
-            0.0f,  0.64f, 0.26f, 0.17f, 0.60f, 0.48f, 0.55f, 0.30f,
-            0.62f, 0.45f, 0.55f, 0.52f, 0.62f, 0.58f, 0.45f, 0.60f,
-            0.55f, 0.38f, 0.00f, 0.20f, 0.40f, 0.55f, 0.80f
-        }}
-    },
+// -----------------------------------------------------------------------------
+// Factory presets: each starts from the parameter defaults, takes its instrument's
+// stages (resonator / pickup / amp), then names only the controls it changes.
+// -----------------------------------------------------------------------------
+enum class Instrument { MkI, Dyno, Wurli200A, Hybrid };
 
-    // --- Wurlitzer Reeds ---
-    {
-        "Wurlitzer 200A Reedy Bark",
-        PresetCategory::Wurlitzer,
-        "mtyas",
-        "Signature 1974 200A electric reed piano. Punchy steel reed envelope with deep tube bark on fortissimo accents.",
-        false, false, "",
-        {{
-            2.0f,  0.68f, 0.28f, 0.24f, 0.42f, 0.22f, 0.35f, 0.35f,
-            0.66f, 0.52f, 0.55f, 0.48f, 0.46f, 0.58f, 0.45f, 0.52f,
-            0.00f, 0.25f, 0.00f, 0.18f, 0.35f, 0.55f, 0.80f
-        }}
-    },
-    {
-        "Super-tramp 200A Stage",
-        PresetCategory::Wurlitzer,
-        "mtyas",
-        "Tight electrostatic pickup gap, pushed preamp saturation, and built-in optical tremolo for iconic rock intros.",
-        false, false, "",
-        {{
-            2.0f,  0.72f, 0.24f, 0.22f, 0.45f, 0.25f, 0.38f, 0.30f,
-            0.70f, 0.55f, 0.58f, 0.56f, 0.44f, 0.64f, 0.60f, 0.55f,
-            0.00f, 0.25f, 0.00f, 0.15f, 0.30f, 0.58f, 0.78f
-        }}
-    },
-    {
-        "Wurlitzer 140B Tube Velvet",
-        PresetCategory::Wurlitzer,
-        "mtyas",
-        "Early 1960s all-tube 140B model. Softer felt hammers, smoother pickup response, and warm tube compression.",
-        false, false, "",
-        {{
-            2.0f,  0.46f, 0.36f, 0.26f, 0.48f, 0.18f, 0.40f, 0.32f,
-            0.52f, 0.40f, 0.42f, 0.40f, 0.56f, 0.48f, 0.35f, 0.42f,
-            0.00f, 0.25f, 0.00f, 0.25f, 0.48f, 0.48f, 0.82f
-        }}
-    },
-    {
-        "Queen 'You're My Best Friend'",
-        PresetCategory::Wurlitzer,
-        "mtyas",
-        "Cranky 200A driven through a vintage stereo chorus pedal with warm tube bass push.",
-        false, false, "",
-        {{
-            2.0f,  0.65f, 0.28f, 0.23f, 0.44f, 0.24f, 0.36f, 0.32f,
-            0.64f, 0.50f, 0.52f, 0.50f, 0.54f, 0.60f, 0.15f, 0.45f,
-            0.00f, 0.25f, 0.45f, 0.22f, 0.40f, 0.52f, 0.80f
-        }}
-    },
-
-    // --- Dyno & Mod 80s ---
-    {
-        "Dyno-My-Piano LA 80s Bell",
-        PresetCategory::DynoMod80s,
-        "mtyas",
-        "Hot-rodded Chuck Monte Dyno preamp mod. Tight pickup proximity, high treble boost, and lush bucket-brigade chorus.",
-        false, false, "",
-        {{
-            1.0f,  0.64f, 0.22f, 0.14f, 0.76f, 0.80f, 0.65f, 0.24f,
-            0.62f, 0.22f, 0.65f, 0.38f, 0.64f, 0.75f, 0.22f, 0.35f,
-            0.00f, 0.25f, 0.58f, 0.32f, 0.58f, 0.48f, 0.80f
-        }}
-    },
-    {
-        "Crystal Ballad Ball",
-        PresetCategory::DynoMod80s,
-        "mtyas",
-        "The quintessential David Foster / 1980s power ballad electric piano with extended crystalline chime overtones.",
-        false, false, "",
-        {{
-            1.0f,  0.60f, 0.24f, 0.13f, 0.82f, 0.86f, 0.70f, 0.20f,
-            0.58f, 0.20f, 0.68f, 0.32f, 0.60f, 0.80f, 0.18f, 0.30f,
-            0.00f, 0.25f, 0.65f, 0.42f, 0.68f, 0.45f, 0.78f
-        }}
-    },
-    {
-        "LA Studio Session Mk II",
-        PresetCategory::DynoMod80s,
-        "mtyas",
-        "High-definition 1980 flat-top Mk II with active EQ modification and fast transient attack for dense West Coast mixes.",
-        false, false, "",
-        {{
-            1.0f,  0.68f, 0.20f, 0.15f, 0.72f, 0.72f, 0.62f, 0.26f,
-            0.65f, 0.25f, 0.60f, 0.42f, 0.58f, 0.70f, 0.28f, 0.42f,
-            0.00f, 0.25f, 0.40f, 0.25f, 0.45f, 0.50f, 0.82f
-        }}
-    },
-    {
-        "R&B Neo Soul Butter",
-        PresetCategory::DynoMod80s,
-        "mtyas",
-        "Warm, scooped mid response with gentle pickup tape-saturation and silky stereo modulation for slow jams.",
-        false, false, "",
-        {{
-            1.0f,  0.46f, 0.34f, 0.18f, 0.75f, 0.58f, 0.56f, 0.30f,
-            0.52f, 0.32f, 0.52f, 0.36f, 0.68f, 0.62f, 0.32f, 0.38f,
-            0.00f, 0.25f, 0.35f, 0.30f, 0.52f, 0.48f, 0.82f
-        }}
-    },
-
-    // --- Ambient & FX ---
-    {
-        "Deep Space Nebula Rhodes",
-        PresetCategory::AmbientFX,
-        "mtyas",
-        "Cavernous hall plate reverb paired with a slow 4-stage optical phaser and soaring singing tines.",
-        false, false, "",
-        {{
-            0.0f,  0.48f, 0.32f, 0.18f, 0.85f, 0.64f, 0.72f, 0.20f,
-            0.55f, 0.36f, 0.52f, 0.25f, 0.56f, 0.62f, 0.25f, 0.28f,
-            0.48f, 0.16f, 0.42f, 0.55f, 0.85f, 0.48f, 0.75f
-        }}
-    },
-    {
-        "Vaporwave Tape Cassette",
-        PresetCategory::AmbientFX,
-        "mtyas",
-        "Warbled vibrato mod, warm tube drive, and lo-fi Baxandall filtering replicating worn cassette tapes.",
-        false, false, "",
-        {{
-            2.0f,  0.55f, 0.32f, 0.22f, 0.50f, 0.30f, 0.42f, 0.45f,
-            0.60f, 0.45f, 0.50f, 0.62f, 0.60f, 0.42f, 0.58f, 0.65f,
-            0.35f, 0.45f, 0.48f, 0.32f, 0.52f, 0.52f, 0.78f
-        }}
-    },
-    {
-        "Port-Hamiltonian Strumming",
-        PresetCategory::AmbientFX,
-        "mtyas",
-        "Maximum tone-bar coupled energy transfer creating an acoustic 12-string resonance harp texture.",
-        false, false, "",
-        {{
-            3.0f,  0.58f, 0.26f, 0.16f, 0.88f, 0.75f, 0.88f, 0.22f,
-            0.56f, 0.32f, 0.60f, 0.30f, 0.54f, 0.68f, 0.20f, 0.32f,
-            0.25f, 0.30f, 0.50f, 0.40f, 0.72f, 0.50f, 0.80f
-        }}
-    },
-    {
-        "Sub-Bark Bass Electric",
-        PresetCategory::AmbientFX,
-        "mtyas",
-        "Heavy bass boost with hard hammer strike position for funky electric piano bass lines.",
-        false, false, "",
-        {{
-            0.0f,  0.72f, 0.22f, 0.22f, 0.62f, 0.35f, 0.45f, 0.35f,
-            0.68f, 0.48f, 0.52f, 0.52f, 0.85f, 0.45f, 0.20f, 0.45f,
-            0.00f, 0.25f, 0.00f, 0.16f, 0.35f, 0.60f, 0.82f
-        }}
-    }
+struct PresetOverride {
+    uint32_t id;
+    float value;
 };
+
+inline PresetItem makeFactoryPreset(const char* name, PresetCategory category, const char* description,
+                                    Instrument instrument, std::initializer_list<PresetOverride> overrides) {
+    PresetItem item;
+    item.name = name;
+    item.category = category;
+    item.author = "mtyas";
+    item.description = description;
+    for (uint32_t i = 0; i < kNumParams; ++i) item.values[i] = kParamMetadata[i].defaultValue;
+    item.values[kParamModelType] = static_cast<float>(instrument) / 3.0f;
+    const bool reed = instrument == Instrument::Wurli200A;
+    const bool electrostatic = instrument == Instrument::Wurli200A || instrument == Instrument::Hybrid;
+    item.values[kParamResonator] = reed ? 1.0f : 0.0f;
+    item.values[kParamPickupType] = electrostatic ? 1.0f : 0.0f;
+    item.values[kParamAmpType] = electrostatic ? 1.0f : 0.0f;
+    if (instrument == Instrument::Wurli200A || instrument == Instrument::Hybrid) {
+        item.values[kParamTremoloDepth] = 0.5f;   // OpenWurli default vibrato depth
+        item.values[kParamTremoloRate] = 0.4819f; // the Twin-T's own 5.56 Hz
+        item.values[kParamReverbMix] = 0.0f;
+    }
+    for (const auto& o : overrides) item.values[o.id] = o.value;
+    return item;
+}
+
+inline std::vector<PresetItem> buildFactoryPresets() {
+    using C = PresetCategory;
+    using I = Instrument;
+    return {
+        // --- Rhodes ---
+        makeFactoryPreset("1973 Suitcase Mk I", C::RhodesVintage,
+            "Suitcase Mk I with stereo auto-pan, warm tone bars and a little bark on hard accents.", I::MkI,
+            {{kParamTremoloDepth, 0.42f}, {kParamTremoloRate, 0.40f}, {kParamPreampDrive, 0.35f}, {kParamCabinet, 0.45f},
+             {kParamBassBoost, 0.56f}, {kParamReverbMix, 0.20f}}),
+        makeFactoryPreset("1977 Stage Mk I (DI)", C::RhodesVintage,
+            "Passive Stage piano straight into the desk: bell up front, woody decay, audible felt.", I::MkI,
+            {{kParamTremoloDepth, 0.0f}, {kParamPreampDrive, 0.25f}, {kParamTrebleBoost, 0.55f}, {kParamKeyNoise, 0.38f},
+             {kParamReverbMix, 0.10f}}),
+        makeFactoryPreset("Silver Top '71 Sparkle", C::RhodesVintage,
+            "Bright early tines struck near the clamp; glassy chime over a round fundamental.", I::MkI,
+            {{kParamTineBell, 0.62f}, {kParamStrikePosition, 0.20f}, {kParamPickupSymmetry, 0.30f}, {kParamTrebleBoost, 0.62f},
+             {kParamTremoloDepth, 0.25f}, {kParamReverbMix, 0.22f}}),
+        makeFactoryPreset("Mellow Ballad Mk I", C::RhodesVintage,
+            "Soft felt, long sustain and a rolled-off top for slow ballads.", I::MkI,
+            {{kParamHammerHardness, 0.30f}, {kParamHammerHysteresis, 0.55f}, {kParamTineDecay, 0.78f}, {kParamTrebleBoost, 0.42f},
+             {kParamVelocityCurve, 0.45f}, {kParamTremoloDepth, 0.30f}, {kParamTremoloRate, 0.32f}, {kParamReverbMix, 0.32f}}),
+        makeFactoryPreset("Barking Mk I Overdrive", C::RhodesVintage,
+            "Tines close to the pickup into a pushed amp and speaker: growls when you dig in.", I::MkI,
+            {{kParamPickupDistance, 0.80f}, {kParamPickupSymmetry, 0.55f}, {kParamPreampDrive, 0.70f}, {kParamHammerHardness, 0.70f},
+             {kParamCabinet, 0.75f}, {kParamTremoloDepth, 0.0f}, {kParamReverbMix, 0.14f}}),
+        makeFactoryPreset("Bell Octave Tine", C::RhodesVintage,
+            "Tine centred on the pickup (Lv near 0): the Falaize-Helie flux law turns it into an octave bell.", I::MkI,
+            {{kParamPickupSymmetry, 0.0f}, {kParamTineBell, 0.55f}, {kParamTremoloDepth, 0.2f}, {kParamReverbMix, 0.28f}, {kParamMasterVolume, 0.95f}}),
+        makeFactoryPreset("Herbie Funk Wah-Pan", C::RhodesVintage,
+            "Envelope filter into a gently driven suitcase; quacks with your dynamics.", I::MkI,
+            {{kParamWahAmount, 0.65f}, {kParamWahSens, 0.55f}, {kParamTremoloDepth, 0.30f}, {kParamPreampDrive, 0.45f},
+             {kParamHammerHardness, 0.60f}, {kParamReverbMix, 0.12f}}),
+        makeFactoryPreset("Phase-90 Stage Funk", C::RhodesVintage,
+            "Close pickups and a slow optical phaser.", I::MkI,
+            {{kParamPhaserMix, 0.62f}, {kParamPhaserRate, 0.24f}, {kParamPickupDistance, 0.66f}, {kParamPreampDrive, 0.45f},
+             {kParamTremoloDepth, 0.0f}, {kParamReverbMix, 0.16f}, {kParamMasterVolume, 0.66f}}),
+
+        // --- Wurlitzer (OpenWurli) ---
+        makeFactoryPreset("200A Factory (OpenWurli)", C::Wurlitzer,
+            "OpenWurli's calibrated 200A: reed, electrostatic pickup, preamp, vibrato and power amp at their defaults.", I::Wurli200A, {}),
+        makeFactoryPreset("200A Supertramp Stage", C::Wurlitzer,
+            "Volume up, vibrato on, a touch of cabinet and room.", I::Wurli200A,
+            {{kParamTremoloDepth, 0.38f}, {kParamPreampDrive, 0.55f}, {kParamCabinet, 0.45f}, {kParamReverbMix, 0.15f}}),
+        makeFactoryPreset("200A Dry Session", C::Wurlitzer,
+            "No vibrato, tight cabinet, small room: sits in a mix.", I::Wurli200A,
+            {{kParamTremoloDepth, 0.0f}, {kParamCabinet, 0.25f}, {kParamReverbMix, 0.12f}}),
+        makeFactoryPreset("200A Cranked Bark", C::Wurlitzer,
+            "Volume pot wide open into the power amp rails, harder hammers, full cabinet.", I::Wurli200A,
+            {{kParamPreampDrive, 0.62f}, {kParamHammerHardness, 0.65f}, {kParamCabinet, 0.85f}, {kParamTrebleBoost, 0.58f},
+             {kParamTremoloDepth, 0.0f}}),
+        makeFactoryPreset("200A Vibrato Lounge", C::Wurlitzer,
+            "Deep LDR vibrato inside the preamp loop, longer sustain, plate reverb.", I::Wurli200A,
+            {{kParamTremoloDepth, 0.85f}, {kParamTineDecay, 0.72f}, {kParamReverbMix, 0.30f}, {kParamReverbDecay, 0.55f}}),
+        makeFactoryPreset("200A Tape Echo", C::Wurlitzer,
+            "Reeds into a warm tape echo.", I::Wurli200A,
+            {{kParamDelayMix, 0.30f}, {kParamDelayTime, 0.58f}, {kParamDelayFeedback, 0.42f}, {kParamReverbMix, 0.20f},
+             {kParamTremoloDepth, 0.25f}}),
+        makeFactoryPreset("200A Psychedelic Phase", C::Wurlitzer,
+            "Vibrato plus a sweeping phaser.", I::Wurli200A,
+            {{kParamPhaserMix, 0.70f}, {kParamPhaserRate, 0.20f}, {kParamTremoloDepth, 0.45f}, {kParamReverbMix, 0.18f}}),
+
+        // --- Dyno / 80s ---
+        makeFactoryPreset("Dyno-My-Piano LA Bell", C::DynoMod80s,
+            "Hard tips near the clamp, centred voicing, Dyno pickups and lush chorus.", I::Dyno,
+            {{kParamHammerHardness, 0.62f}, {kParamHammerHysteresis, 0.22f}, {kParamStrikePosition, 0.19f}, {kParamTineDecay, 0.75f},
+             {kParamTineBell, 0.78f}, {kParamToneBarCoupling, 0.65f}, {kParamPickupDistance, 0.62f}, {kParamPickupSymmetry, 0.22f},
+             {kParamPickupResonance, 0.65f}, {kParamBassBoost, 0.60f}, {kParamTrebleBoost, 0.70f}, {kParamTremoloDepth, 0.15f},
+             {kParamChorusMix, 0.55f}, {kParamReverbMix, 0.32f}, {kParamReverbDecay, 0.58f}}),
+        makeFactoryPreset("80s Ballad Chorus EP", C::DynoMod80s,
+            "Chorus, long hall and a soft echo tail.", I::Dyno,
+            {{kParamTineBell, 0.70f}, {kParamChorusMix, 0.70f}, {kParamReverbMix, 0.42f}, {kParamReverbDecay, 0.65f},
+             {kParamDelayMix, 0.15f}, {kParamDelayTime, 0.62f}, {kParamDelayFeedback, 0.30f}, {kParamTremoloDepth, 0.0f}}),
+        makeFactoryPreset("Dyno Tine Shimmer", C::DynoMod80s,
+            "Strong tone-bar beating and chime with a slow phaser.", I::Dyno,
+            {{kParamToneBarCoupling, 0.75f}, {kParamTineBell, 0.70f}, {kParamPhaserMix, 0.28f}, {kParamPhaserRate, 0.15f},
+             {kParamReverbMix, 0.30f}, {kParamTremoloDepth, 0.0f}}),
+        makeFactoryPreset("Glass Tine", C::DynoMod80s,
+            "Very hard, undamped hammers and an octave-leaning pickup: almost FM-like.", I::Dyno,
+            {{kParamTineBell, 0.90f}, {kParamHammerHardness, 0.82f}, {kParamHammerHysteresis, 0.15f}, {kParamPickupSymmetry, 0.10f},
+             {kParamChorusMix, 0.40f}, {kParamReverbMix, 0.35f}, {kParamTremoloDepth, 0.0f}}),
+
+        // --- Hybrid / FX ---
+        makeFactoryPreset("Hybrid: Tine into 200A", C::AmbientFX,
+            "A Rhodes tine on the Wurlitzer's electrostatic comb, through the 200A preamp and vibrato.", I::Hybrid,
+            {{kParamTremoloDepth, 0.35f}, {kParamCabinet, 0.3f}, {kParamReverbMix, 0.15f}}),
+        makeFactoryPreset("Hybrid: Reed into Suitcase", C::AmbientFX,
+            "Wurlitzer reeds on a Rhodes magnetic pickup, panning through a suitcase.", I::MkI,
+            {{kParamResonator, 1.0f}, {kParamTremoloDepth, 0.45f}, {kParamCabinet, 0.4f}, {kParamReverbMix, 0.18f}}),
+        makeFactoryPreset("Reed on Magnetic, 200A Amp", C::AmbientFX,
+            "Reeds through a magnetic pickup into the 200A circuit.", I::Wurli200A,
+            {{kParamPickupType, 0.0f}, {kParamPickupDistance, 0.65f}, {kParamTremoloDepth, 0.3f}}),
+        makeFactoryPreset("Tine on Comb, Suitcase", C::AmbientFX,
+            "Rhodes tine on an electrostatic comb with suitcase auto-pan.", I::MkI,
+            {{kParamPickupType, 1.0f}, {kParamTremoloDepth, 0.4f}, {kParamReverbMix, 0.2f}}),
+        makeFactoryPreset("Mu-Tron Funk Machine", C::AmbientFX,
+            "Deep envelope filter, punchy hammers, dry and tight.", I::MkI,
+            {{kParamWahAmount, 0.92f}, {kParamWahSens, 0.62f}, {kParamPreampDrive, 0.42f}, {kParamHammerHardness, 0.66f},
+             {kParamTremoloDepth, 0.0f}, {kParamReverbMix, 0.08f}}),
+        makeFactoryPreset("Dub Echo Chamber", C::AmbientFX,
+            "Long, darkening tape repeats and a big room.", I::MkI,
+            {{kParamDelayMix, 0.45f}, {kParamDelayTime, 0.72f}, {kParamDelayFeedback, 0.68f}, {kParamReverbMix, 0.38f},
+             {kParamReverbDecay, 0.70f}, {kParamTrebleBoost, 0.42f}, {kParamTremoloDepth, 0.0f}}),
+        makeFactoryPreset("Ambient Tine Pad", C::AmbientFX,
+            "Soft hammers, endless sustain, chorus, echo and a huge reverb.", I::Dyno,
+            {{kParamHammerHardness, 0.22f}, {kParamTineDecay, 0.95f}, {kParamReverbMix, 0.65f}, {kParamReverbDecay, 0.88f},
+             {kParamChorusMix, 0.50f}, {kParamDelayMix, 0.25f}, {kParamDelayTime, 0.80f}, {kParamDelayFeedback, 0.50f},
+             {kParamTremoloDepth, 0.0f}}),
+        makeFactoryPreset("Sub-Bark Bass EP", C::AmbientFX,
+            "Heavy bass, close pickups and grit for left-hand bass lines.", I::MkI,
+            {{kParamBassBoost, 0.78f}, {kParamPickupDistance, 0.75f}, {kParamPreampDrive, 0.55f}, {kParamHammerHardness, 0.70f},
+             {kParamTremoloDepth, 0.0f}, {kParamReverbMix, 0.08f}, {kParamMasterVolume, 0.45f}}),
+        makeFactoryPreset("Lo-Fi Cassette Keys", C::AmbientFX,
+            "Dull top, small speaker, wobbly short echo and chorus.", I::Wurli200A,
+            {{kParamTrebleBoost, 0.30f}, {kParamCabinet, 0.95f}, {kParamDelayMix, 0.22f}, {kParamDelayTime, 0.35f},
+             {kParamDelayFeedback, 0.30f}, {kParamChorusMix, 0.35f}, {kParamPreampDrive, 0.52f}}),
+    };
+}
+
+static const std::vector<PresetItem> kExpandedFactoryPresets = buildFactoryPresets();
 
 class PhsPresetManager {
 public:
@@ -410,6 +342,8 @@ private:
         outItem.isUserPreset = true;
         outItem.filePath = path;
         outItem.category = PresetCategory::User;
+        for (uint32_t i = 0; i < kNumParams; ++i) outItem.values[i] = kParamMetadata[i].defaultValue;
+        uint32_t valuesRead = 0;
 
         std::string line;
         while (std::getline(in, line)) {
@@ -436,7 +370,13 @@ private:
                 while (std::getline(ss, token, ',') && pIdx < kNumParams) {
                     outItem.values[pIdx++] = std::stof(token);
                 }
+                valuesRead = pIdx;
             }
+        }
+        if (valuesRead > 0 && valuesRead <= kNumParamsV2) {
+            // Saved before the stage selectors existed: the Model choice implied them
+            const float stage = stepIndex(outItem.values[kParamModelType], 3) == 2 ? 1.0f : 0.0f;
+            outItem.values[kParamResonator] = outItem.values[kParamPickupType] = outItem.values[kParamAmpType] = stage;
         }
         if (outItem.name.empty()) {
             outItem.name = std::filesystem::path(path).stem().string();

@@ -1,91 +1,129 @@
+// Windows host for the shared editor: a child window that renders phs::gui::Editor through
+// the portable software canvas and blits it as a top-down 32-bit DIB.
 #if defined(_WIN32)
 #include "PhsWin32View.h"
-#include <windows.h>
+#include "PhsSoftwareCanvas.hpp"
 #include <windowsx.h>
-#include <cmath>
-#include <string>
+#include <shellapi.h>
+#include <memory>
 
 namespace {
 
-const wchar_t* kWin32ClassName = L"electropianoEditor";
-
-struct Win32EditorState {
-    phs::PhsSynthEngine* engine = nullptr;
-    phs::ParamChangeCallback paramCallback;
-    UINT_PTR timerId = 0;
+struct Win32Editor {
+    std::unique_ptr<phs::gui::Editor> editor;
+    phs::gui::SoftwareCanvas canvas;
 };
 
-LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    auto* state = reinterpret_cast<Win32EditorState*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+const wchar_t* kClassName = L"electropianoEditor";
 
+HINSTANCE moduleInstance() {
+    HMODULE m = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&kClassName), &m);
+    return m;
+}
+
+float logicalY(LPARAM lp) { return static_cast<float>(phs::kEditorHeight - GET_Y_LPARAM(lp)); }
+
+LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    auto* self = reinterpret_cast<Win32Editor*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
         case WM_CREATE: {
-            auto* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
-            state = reinterpret_cast<Win32EditorState*>(cs->lpCreateParams);
-            SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
-            state->timerId = SetTimer(hwnd, 1, 33, nullptr); // ~30 fps
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+            SetTimer(hwnd, 1, 33, nullptr); // ~30 fps; repaints only when something changed
             return 0;
         }
-        case WM_TIMER: {
-            InvalidateRect(hwnd, nullptr, FALSE);
+        case WM_TIMER:
+            if (self && self->editor->wantsRedraw()) InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        }
+        case WM_ERASEBKGND:
+            return 1;
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-
-            // Double buffering
-            HDC memDC = CreateCompatibleDC(hdc);
-            HBITMAP memBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
-            HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(memDC, memBmp));
-
-            // Background fill (Navy / Dark Slate)
-            HBRUSH bgBrush = CreateSolidBrush(RGB(18, 22, 30));
-            FillRect(memDC, &rc, bgBrush);
-            DeleteObject(bgBrush);
-
-            // Title text
-            SetBkMode(memDC, TRANSPARENT);
-            SetTextColor(memDC, RGB(240, 210, 110));
-            HFONT titleFont = CreateFontW(22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                          CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-            HFONT oldFont = static_cast<HFONT>(SelectObject(memDC, titleFont));
-            TextOutW(memDC, 20, 15, L"electropiano by mtyas", 20);
-
-            SetTextColor(memDC, RGB(110, 190, 240));
-            HFONT subFont = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                                        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-            SelectObject(memDC, subFont);
-            TextOutW(memDC, 22, 40, L"Port-Hamiltonian Rhodes & Wurlitzer Physical Modeling", 53);
-
-            // Blit buffer to screen
-            BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
-
-            SelectObject(memDC, oldFont);
-            DeleteObject(titleFont);
-            DeleteObject(subFont);
-            SelectObject(memDC, oldBmp);
-            DeleteObject(memBmp);
-            DeleteDC(memDC);
-
+            if (self) {
+                auto& c = self->canvas;
+                if (c.width() != phs::kEditorWidth || c.height() != phs::kEditorHeight) c.resize(phs::kEditorWidth, phs::kEditorHeight);
+                self->editor->draw(c);
+                BITMAPINFO bmi{};
+                bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                bmi.bmiHeader.biWidth = c.width();
+                bmi.bmiHeader.biHeight = -c.height(); // top-down
+                bmi.bmiHeader.biPlanes = 1;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                SetDIBitsToDevice(hdc, 0, 0, c.width(), c.height(), 0, 0, 0, c.height(), c.pixels(), &bmi, DIB_RGB_COLORS);
+            }
             EndPaint(hwnd, &ps);
             return 0;
         }
-        case WM_DESTROY: {
-            if (state) {
-                if (state->timerId) KillTimer(hwnd, state->timerId);
-                delete state;
-                SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK:
+            if (self) {
+                SetFocus(hwnd);
+                SetCapture(hwnd);
+                self->editor->mouseDown(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp), (wp & MK_SHIFT) != 0,
+                                        GetMessageTime() / 1000.0);
+                InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
-        }
+        case WM_MOUSEMOVE:
+            if (self && (wp & MK_LBUTTON)) {
+                self->editor->mouseDrag(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONUP:
+            if (self) {
+                ReleaseCapture();
+                self->editor->mouseUp(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_RBUTTONDOWN:
+            if (self) {
+                self->editor->rightMouseDown(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_MOUSEWHEEL:
+            if (self) {
+                POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+                ScreenToClient(hwnd, &pt);
+                self->editor->scroll(static_cast<float>(pt.x), static_cast<float>(phs::kEditorHeight - pt.y),
+                                     GET_WHEEL_DELTA_WPARAM(wp) / static_cast<float>(WHEEL_DELTA));
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        case WM_GETDLGCODE:
+            return DLGC_WANTALLKEYS | DLGC_WANTCHARS;
+        case WM_KEYDOWN:
+            if (self) {
+                bool handled = false;
+                if (wp == VK_ESCAPE) handled = self->editor->keyAction(phs::gui::Key::Escape);
+                else if (wp == VK_RETURN) handled = self->editor->keyAction(phs::gui::Key::Enter);
+                else if (wp == VK_BACK) handled = self->editor->keyAction(phs::gui::Key::Backspace);
+                if (handled) { InvalidateRect(hwnd, nullptr, FALSE); return 0; }
+            }
+            break;
+        case WM_CHAR:
+            if (self && wp >= 32 && self->editor->keyChar(static_cast<uint32_t>(wp))) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case WM_DESTROY:
+            KillTimer(hwnd, 1);
+            if (self) {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                delete self;
+            }
+            return 0;
+        default:
+            break;
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 } // namespace
@@ -93,40 +131,35 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 namespace phs {
 
 HWND createPhsWin32EditorView(HWND parent, PhsSynthEngine* engine, ParamChangeCallback onParamChange) {
-    HINSTANCE hInst = GetModuleHandle(nullptr);
-
+    const HINSTANCE inst = moduleInstance();
     WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(WNDCLASSEXW);
-    wc.lpfnWndProc = EditorWndProc;
-    wc.hInstance = hInst;
-    wc.lpszClassName = kWin32ClassName;
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    RegisterClassExW(&wc);
-
-    auto* state = new Win32EditorState();
-    state->engine = engine;
-    state->paramCallback = onParamChange;
-
-    HWND hwnd = CreateWindowExW(
-        0,
-        kWin32ClassName,
-        L"PyPHS Electric Piano",
-        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-        0, 0, kEditorWidth, kEditorHeight,
-        parent,
-        nullptr,
-        hInst,
-        state
-    );
-
+    if (!GetClassInfoExW(inst, kClassName, &wc)) {
+        wc.cbSize = sizeof(wc);
+        wc.style = CS_DBLCLKS;
+        wc.lpfnWndProc = EditorWndProc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.lpszClassName = kClassName;
+        RegisterClassExW(&wc);
+    }
+    auto* self = new Win32Editor();
+    gui::EditorHost host;
+    host.paramChanged = std::move(onParamChange);
+    host.openUrl = [](const std::string& url) { ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); };
+    self->editor = std::make_unique<gui::Editor>(engine, std::move(host));
+    self->canvas.resize(kEditorWidth, kEditorHeight);
+    HWND hwnd = CreateWindowExW(0, kClassName, L"electropiano", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0,
+                                kEditorWidth, kEditorHeight, parent, nullptr, inst, self);
+    if (!hwnd) delete self;
     return hwnd;
 }
 
 void destroyPhsWin32EditorView(HWND hwnd) {
-    if (hwnd && IsWindow(hwnd)) {
-        DestroyWindow(hwnd);
-    }
+    if (!hwnd) return;
+    if (auto* self = reinterpret_cast<Win32Editor*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA))) self->editor->detachEngine();
+    DestroyWindow(hwnd); // WM_DESTROY frees the editor
 }
 
 } // namespace phs
+
 #endif // _WIN32

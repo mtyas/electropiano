@@ -41,7 +41,7 @@ int main() {
         // 2. Open About dialog via Key/Value or direct call
         // In PhsCocoaView, aboutButtonRect_ is at (818, 538)
         // Let's create an event or use setValue:forKey:
-        [view setValue:@YES forKey:@"aboutOpen_"];
+        phs::editorOfPhsView(view)->mouseDown(870, 705, false, 1.0); // About button
         saveImage(@"renders/gui_about_snapshot.png");
 
         phs::destroyPhsEditorView(view);

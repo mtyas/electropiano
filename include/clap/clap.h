@@ -8,7 +8,10 @@
 extern "C" {
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(_WIN32)
+#define CLAP_ABI __cdecl
+#define CLAP_EXPORT __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
 #define CLAP_ABI
 #define CLAP_EXPORT __attribute__((visibility("default")))
 #else

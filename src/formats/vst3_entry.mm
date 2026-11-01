@@ -418,10 +418,10 @@ public:
         copyAsciiToUtf16(info.title, meta.name, 128);
         copyAsciiToUtf16(info.shortTitle, meta.shortName, 128);
         copyAsciiToUtf16(info.units, meta.unit, 128);
-        info.stepCount = meta.isStepped ? 3 : 0;
+        info.stepCount = meta.steps;
         info.defaultNormalizedValue = static_cast<ParamValue>(meta.defaultValue);
         info.unitId = 0;
-        info.flags = ParameterInfo::kCanAutomate | (meta.isStepped ? ParameterInfo::kIsList : 0);
+        info.flags = ParameterInfo::kCanAutomate | (meta.steps > 0 ? ParameterInfo::kIsList : 0);
         return kResultOk;
     }
 
@@ -539,7 +539,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         std::snprintf(info->vendor, sizeof(info->vendor), "mtyas");
-        std::snprintf(info->version, sizeof(info->version), "1.2.0");
+        std::snprintf(info->version, sizeof(info->version), "0.77");
         std::snprintf(info->sdkVersion, sizeof(info->sdkVersion), "VST 3.7.8");
         return kResultOk;
     }
@@ -554,7 +554,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         copyAsciiToUtf16(info->vendor, "mtyas", 64);
-        copyAsciiToUtf16(info->version, "1.2.0", 64);
+        copyAsciiToUtf16(info->version, "0.77", 64);
         copyAsciiToUtf16(info->sdkVersion, "VST 3.7.8", 64);
         return kResultOk;
     }
@@ -580,21 +580,28 @@ static PhsPluginFactory gPluginFactory;
 
 } // namespace
 
+#if defined(_WIN32)
+#define PHS_VST3_EXPORT __declspec(dllexport)
+#else
+#define PHS_VST3_EXPORT __attribute__((visibility("default")))
+#endif
+
 extern "C" {
 
-__attribute__((visibility("default")))
-IPluginFactory* SMTG_API GetPluginFactory() {
+PHS_VST3_EXPORT IPluginFactory* SMTG_API GetPluginFactory() {
     return &gPluginFactory;
 }
 
-__attribute__((visibility("default")))
-bool bundleEntry(CFBundleRef) {
-    return true;
-}
-
-__attribute__((visibility("default")))
-bool bundleExit(void) {
-    return true;
-}
+// Module entry points each platform's hosts look for
+#if defined(__APPLE__)
+PHS_VST3_EXPORT bool bundleEntry(CFBundleRef) { return true; }
+PHS_VST3_EXPORT bool bundleExit(void) { return true; }
+#elif defined(_WIN32)
+PHS_VST3_EXPORT bool InitDll() { return true; }
+PHS_VST3_EXPORT bool ExitDll() { return true; }
+#else
+PHS_VST3_EXPORT bool ModuleEntry(void*) { return true; }
+PHS_VST3_EXPORT bool ModuleExit(void) { return true; }
+#endif
 
 } // extern "C"

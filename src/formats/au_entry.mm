@@ -60,7 +60,7 @@ namespace {
 static const UInt32 kAuType         = 'aumu';
 static const UInt32 kAuSubType      = 'PhsE';
 static const UInt32 kAuManufacturer = 'PyPH';
-static const UInt32 kAuVersion      = 0x00010100; // v1.1.0
+static const UInt32 kAuVersion      = 0x00004D00; // v0.77
 
 struct PropListener {
     AudioUnitPropertyID id;
@@ -325,7 +325,7 @@ static OSStatus auGetProperty(void *selfPtr,
             std::memset(pInfo, 0, sizeof(*pInfo));
             std::snprintf(pInfo->name, sizeof(pInfo->name), "%s", meta.name);
             pInfo->cfNameString = CFStringCreateWithCString(kCFAllocatorDefault, meta.name, kCFStringEncodingUTF8);
-            pInfo->unit = meta.isStepped ? kAudioUnitParameterUnit_Indexed : kAudioUnitParameterUnit_Generic;
+            pInfo->unit = kAudioUnitParameterUnit_Generic; // normalised 0..1, choices included
             pInfo->minValue = 0.0f;
             pInfo->maxValue = 1.0f;
             pInfo->defaultValue = meta.defaultValue;
@@ -359,18 +359,19 @@ static OSStatus auGetProperty(void *selfPtr,
 
         case kAudioUnitProperty_FactoryPresets: {
             if (inScope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidProperty;
-            static AUPreset sPresets[phs::kNumPresets];
+            static const int sCount = static_cast<int>(phs::kExpandedFactoryPresets.size());
+            static std::vector<AUPreset> sPresets(sCount);
             static CFArrayRef sPresetArray = nullptr;
             if (!sPresetArray) {
-                const void *ptrs[phs::kNumPresets];
-                for (int i = 0; i < phs::kNumPresets; ++i) {
+                std::vector<const void *> ptrs(sCount);
+                for (int i = 0; i < sCount; ++i) {
                     sPresets[i].presetNumber = i;
                     sPresets[i].presetName = CFStringCreateWithCString(kCFAllocatorDefault,
-                                                                       phs::kFactoryPresets[i].name,
+                                                                       phs::kExpandedFactoryPresets[i].name.c_str(),
                                                                        kCFStringEncodingUTF8);
                     ptrs[i] = &sPresets[i];
                 }
-                sPresetArray = CFArrayCreate(kCFAllocatorDefault, ptrs, phs::kNumPresets, nullptr);
+                sPresetArray = CFArrayCreate(kCFAllocatorDefault, ptrs.data(), sCount, nullptr);
             }
             CFRetain(sPresetArray);
             *static_cast<CFArrayRef *>(outData) = sPresetArray;
@@ -383,8 +384,9 @@ static OSStatus auGetProperty(void *selfPtr,
             if (inScope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidProperty;
             const int idx = self->engine.getCurrentPreset();
             self->currentPreset.presetNumber = idx;
+            const auto *preset = self->engine.getPresetManager().getPreset(idx);
             self->currentPreset.presetName = CFStringCreateWithCString(kCFAllocatorDefault,
-                                                                       phs::kFactoryPresets[idx].name,
+                                                                       preset ? preset->name.c_str() : "Custom",
                                                                        kCFStringEncodingUTF8);
             if (inID == kAudioUnitProperty_PresentPreset && self->currentPreset.presetName) {
                 CFRetain(self->currentPreset.presetName);
@@ -512,7 +514,7 @@ static OSStatus auSetProperty(void *selfPtr,
             if (inScope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidProperty;
             if (inDataSize < sizeof(AUPreset)) return kAudio_ParamError;
             const auto &pr = *static_cast<const AUPreset *>(inData);
-            if (pr.presetNumber >= 0 && pr.presetNumber < phs::kNumPresets) {
+            if (pr.presetNumber >= 0 && pr.presetNumber < self->engine.getPresetManager().getPresetCount()) {
                 self->engine.loadPreset(pr.presetNumber);
             }
             self->notifyPropertyChanged(kAudioUnitProperty_PresentPreset, inScope, inElement);

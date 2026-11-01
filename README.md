@@ -1,150 +1,149 @@
-# electropiano by mtyas
+# electropiano
 
-[![Build Status](https://github.com/matthewtyas/pianoelectro/actions/workflows/build.yml/badge.svg)](https://github.com/matthewtyas/pianoelectro/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platforms: macOS | Windows | Linux](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue.svg)]()
-[![Formats: VST3 | CLAP | AU | Standalone](https://img.shields.io/badge/Formats-VST3%20%7C%20CLAP%20%7C%20AU%20%7C%20Standalone-green.svg)]()
-[![Website: mtyas.com](https://img.shields.io/badge/Website-mtyas.com-orange.svg)](https://mtyas.com)
-[![Support on Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-ff5e5b.svg)](https://ko-fi.com/mtyas)
+**Physically modelled Rhodes and Wurlitzer electric pianos — built from stages you can swap.**
 
-An open-source, multiplatform (macOS, Windows, Linux) physical modeling virtual instrument simulating **Fender Rhodes** (Mk I & Dyno-My-Piano) and **Wurlitzer 200A** electric pianos.
+[![Builds](https://github.com/mtyas/electropiano/actions/workflows/build.yml/badge.svg)](https://github.com/mtyas/electropiano/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/mtyas/electropiano?include_prereleases)](https://github.com/mtyas/electropiano/releases)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-informational)
+![Formats](https://img.shields.io/badge/formats-CLAP%20%7C%20VST3%20%7C%20AU%20%7C%20Standalone-informational)
 
-Created and developed by **Matthew Tyas (mtyas)**:
-- 🌐 **Website**: [mtyas.com](https://mtyas.com)
-- ☕ **Support / Donate**: [ko-fi.com/mtyas](https://ko-fi.com/mtyas)
+![electropiano](docs/images/editor_rhodes.png)
 
-The acoustic and electro-mechanical engine is based on the **Port-Hamiltonian Systems (PHS)** research developed by Antoine Falaize & Thomas Hélie (*"Passive simulation of the nonlinear port-Hamiltonian modeling of a Rhodes piano"*, *Journal of Sound and Vibration*, 2017) and the [pyphs](https://github.com/pyphs/pyphs) research project.
+electropiano doesn't play back recordings. Every note is computed from the mechanics and
+electronics of the instrument: a felt hammer hitting a steel tine or reed, the vibration
+passing a magnetic or electrostatic pickup, and an amplifier. Because the instrument is
+simulated part by part, you can rebuild it — put a **Rhodes tine through a Wurlitzer 200A
+amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 
----
-
-## 🎹 Physical & Mathematical Modeling (PHS)
-
-Unlike traditional sample libraries that require tens of gigabytes of static velocity layers, **electropiano** simulates the continuous, coupled multi-physical laws of conservation in discrete time using **structure-preserving symplectic numerical schemes**.
-
-```
- +---------------------------------------------------------------------------------------+
- |                                  PORT-HAMILTONIAN SYSTEM                              |
- |                                                                                       |
- |  [H] Hammer Felt      [B] Cantilever Tine / Reed    [T] Tone-Bar      [P] Transducer   |
- |  Hertzian Storage     Euler-Bernoulli Modal Beam    Coupled Shimmer   Faraday / E-Stat|
- |  + Dissipative Loss   Modes: f0, 6.27*f0, 17.5*f0   Tuned Resonator   C-Inf Analytic  |
- |       \                      /                           /                   /        |
- |        +---- Interconnection Matrix J = -J^T  <---------+                   /         |
- |        +---- Dissipation Matrix R >= 0                                     /          |
- +---------------------------------------------------------------------------+-----------+
-                                                                             |
-                                                                             v
-                                                                 [E] Vintage Stage FX
-                                                                 - Continuous JFET Preamp
-                                                                 - Passive Baxandall EQ
-                                                                 - Suitcase Stereo Tremolo
-                                                                 - 4-Stage Optical Phaser
-                                                                 - Stereo BBD Chorus
-                                                                 - Stereo Spring & Hall Reverb
-```
-
-### 1. Hammer-Tine Impact ($H \leftrightarrow B$)
-The hammer felt is modeled as a nonlinear Hertzian contact spring with Hunt-Crossley hysteresis:
-$$F_h(\xi, \dot{\xi}) = \left[ k_h \xi^{\alpha_h} + \lambda_h \xi^{\alpha_h} \dot{\xi} \right]^+$$
-Contact duration $\tau_c \approx 0.5\text{--}1.5\text{ ms}$ is physically calibrated across the 88-key keyboard to ensure zero sub-bass thumps and 100% natural impulse transfer into the cantilever beam.
-
-### 2. Cantilever Beam Resonator ($B$)
-The tine (Rhodes) and reed (Wurlitzer) are modeled using exact modal decompositions of the clamped-free Euler-Bernoulli beam equation:
-- **Mode 0 ($1.000 f_0$)**: Fundamental transverse bending mode providing warm singing sustain.
-- **Mode 1 ($\sim 6.267 f_0$)**: Signature crystalline cantilever chime ("Tine Bell").
-- **Mode 2 ($\sim 17.55 f_0$)**: Initial metallic strike ping.
-- **Modes 3 & 4 ($2 f_0, 3 f_0$)**: Structural bridge warmth and harmonic body.
-
-All modal frequencies use exact continuous-to-discrete bilinear/midpoint pre-warping:
-$$\omega_{m,\text{warped}} = 2 f_s \tan\left(\frac{\pi f_m}{f_s}\right)$$
-
-### 3. Nonlinear Pickup Transduction ($P$)
-Faraday's law of electromagnetic induction (Rhodes coil) and electrostatic capacitance variation (Wurlitzer reed) are integrated using $C^\infty$ analytic sensitivity functions that guarantee unconditional numerical passivity:
-$$\frac{dH}{dt} + P_{\text{diss}} = P_{\text{in}} \quad \Longleftrightarrow \quad \Delta H_{\text{discrete}} \le 0 \quad (\text{post-impact})$$
+**[Download](https://github.com/mtyas/electropiano/releases)** ·
+**[User manual](docs/MANUAL.md)** ·
+[mtyas.com](https://mtyas.com) ·
+[Support on Ko-fi](https://ko-fi.com/mtyas)
 
 ---
 
-## ✨ Features
+## Highlights
 
-- **Multiplatform Formats**:
-  - **macOS**: VST3, CLAP, AudioUnit v2 (`.component`), and Standalone App (Universal arm64 + x86_64).
-  - **Windows**: VST3, CLAP, and Standalone (`.exe`) (x64).
-  - **Linux**: VST3, CLAP, and Standalone (x64).
-- **Streamlined Compact GUI ($880 \times 580$ px)**:
-  - Milled dark brushed graphite chassis with solid American walnut end-cheeks.
-  - Short, punchy knob labels (`Hardness`, `Cushion`, `Strike`, `Decay`, `Chime`, `Tonebar`, `Thump`, `Touch`, `Air Gap`, `Voicing`, `Coil Q`, `Bass`, `Treble`, `Drive`, `Speed`, `Depth`, `Rate`, `Mix`, `Chorus`, `Volume`).
-  - Raytraced 3D rotary knobs modeled in Blender with 64-frame animation and glowing LED value arcs.
-  - **About Window**: Built-in dialog with plugin information, project credits, link to [mtyas.com](https://mtyas.com), and [Ko-fi donation link](https://ko-fi.com/mtyas).
-- **Full Undo & Redo History**:
-  - 64-step deep undo/redo stack tracking parameter edits and preset changes.
-- **Interactive MIDI Learn**:
-  - Click `MIDI` in the toolbar or **right-click** any knob, move a MIDI hardware CC controller to bind instantly.
-  - Mapped knobs display glowing `CC #` badges.
-- **Full-Featured Preset Browser**:
-  - 16 curated factory presets across 4 categories: *Rhodes Vintage*, *Wurlitzer Reeds*, *Dyno & Mod 80s*, *Ambient & FX*.
-  - Category filtering, search, and user preset saving to disk (`.phspreset`).
-- **Playable Keyboard & Controls**:
-  - Playable 61-key velocity-sensitive keyboard with active key lighting.
-  - Pitch Bend and Modulation Wheels with 3D slider caps.
-  - Authentic Sustain Pedal rocker switch with green jewel indicator.
+- **Two instruments, modelled properly**
+  - **Fender Rhodes** (Mk I and Dyno voicings): a port-Hamiltonian hammer, tine and tone bar
+    after Falaize & Hélie and [PyPHS](https://github.com/pyphs/pyphs), solved with an
+    energy-conserving scheme, and their magnetic pickup law.
+  - **Wurlitzer 200A**: a C++ port of [OpenWurli](https://github.com/hal0zer0/openwurli) —
+    reed, electrostatic pickup and the 200A's amplifier simulated component by component.
+- **Swappable stages** — Resonator (tine / reed) → Pickup (magnetic / electrostatic) →
+  Amp (Suitcase / 200A circuit), mixed freely.
+- **32 controls**: hammer, tine/reed, pickup geometry, amp, cabinet, envelope filter, phaser,
+  chorus, tape echo and reverb. Labels and read-outs follow the stages you choose.
+- **28 factory presets**, including OpenWurli's calibrated 200A and cross-instrument hybrids.
+- **One editor on every platform**, MIDI learn, undo/redo, user presets, a playable keyboard.
+- **CLAP and VST3** on macOS, Windows and Linux, plus **Audio Unit** and a **standalone app**
+  on macOS.
 
----
+<table>
+<tr>
+<td><img src="docs/images/editor_wurlitzer.png" alt="Wurlitzer 200A"></td>
+<td><img src="docs/images/editor_hybrid.png" alt="Hybrid: Rhodes tine through the 200A circuit"></td>
+</tr>
+<tr>
+<td align="center">Wurlitzer 200A (OpenWurli)</td>
+<td align="center">Hybrid: Rhodes tine through the 200A circuit</td>
+</tr>
+</table>
 
-## 🛠️ Building from Source
+## The signal chain
 
-### macOS (Apple Clang / Make)
-No external libraries are required. Simply run:
+![Signal chain](docs/images/section_signal_chain.png)
+
+| Stage | Options |
+|---|---|
+| **Resonator** | **Rhodes Tine** — felt hammer, cantilever tine and tone bar (port-Hamiltonian). **Wurli Reed** — OpenWurli's modal reed, calibrated per key. |
+| **Pickup** | **Magnetic** — Falaize & Hélie's flux law: the tine tip's horizontal and vertical offsets set bark and bell. **Electrostatic** — OpenWurli's field-solved reed-to-comb capacitance. |
+| **Amp** | **Suitcase** — Rhodes preamp saturation and stereo auto-pan. **200A Circuit** — the 200A's two-transistor preamp with the LDR vibrato inside its feedback loop, volume network and power amp. |
+
+The **Mk I / Dyno / 200A / Hybrid** buttons set all three stages at once. The
+[manual](docs/MANUAL.md) explains every control.
+
+## Install
+
+Grab the archive for your system from
+[Releases](https://github.com/mtyas/electropiano/releases):
+
+| System | Copy | To |
+|---|---|---|
+| macOS (Universal) | `electropiano.clap` / `.vst3` / `.component` | `~/Library/Audio/Plug-Ins/CLAP` / `VST3` / `Components` |
+| Windows (x64) | `electropiano.clap` / `electropiano.vst3` | `C:\Program Files\Common Files\CLAP` / `VST3` |
+| Linux (x64) | `electropiano.clap` / `electropiano.vst3` | `~/.clap` / `~/.vst3` |
+
+The macOS builds aren't notarised: if macOS blocks them, see
+[Installing](docs/MANUAL.md#1-installing).
+
+## Build from source
+
+**macOS** (Xcode command-line tools):
+
 ```bash
-# Build all formats (CLAP, VST3, AU, App) and run tests
-make all
-make test
-
-# Install to system plugin folders (~/Library/Audio/Plug-Ins)
-make install
+make all                                      # CLAP, VST3, AU, standalone app, tests
+make test                                     # passivity, OpenWurli port and plugin-load tests
+make all ARCHFLAGS="-arch arm64 -arch x86_64" # universal binaries
 ```
 
-### Cross-Platform Build (CMake)
-Works on macOS, Windows (Visual Studio 2022), and Linux (GCC / Clang):
+**Windows** (Visual Studio 2022) and **Linux** (`libx11-dev`):
+
 ```bash
-# Configure
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-# Build plugins and test runner
 cmake --build build --config Release
-
-# Run automated tests
-ctest --test-dir build --output-on-failure
 ```
 
----
+No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
 
-## 🚀 Hosting on GitHub & Automated Builds
+### Layout
 
-This repository includes a complete GitHub Actions CI/CD matrix workflow (`.github/workflows/build.yml`) that builds and packages binaries for macOS, Windows, and Linux on every commit or tag push.
+| Path | |
+|---|---|
+| `src/dsp/` | Engine, Rhodes voice (`PhsVoice.hpp`), effects, parameters, presets |
+| `src/dsp/wurli/` | Wurlitzer 200A model (OpenWurli port) |
+| `src/gui/` | Shared editor (`PhsEditor`), CoreGraphics / Win32 / X11 hosts, software renderer |
+| `src/formats/` | CLAP, VST3, AU and standalone wrappers |
+| `tools/` | Tests, screenshot and font-atlas generators |
 
-```bash
-git push origin main
-git tag v1.2.0
-git push origin v1.2.0
-```
+## Verification
 
-When you push a tag like `v1.2.0`, GitHub Actions will automatically compile, test, and package release ZIP archives (`electropiano-macOS-Universal.zip`, `electropiano-Windows-x64.zip`, `electropiano-Linux-x64.tar.gz`) directly to your GitHub Releases page!
+`make test` checks, among other things:
 
----
+- **Energy conservation** of the Rhodes model: the discrete power balance holds on every
+  sample to ~10⁻¹⁵ of the stored energy, including through hammer contact.
+- **The OpenWurli port** against OpenWurli's SPICE-derived acceptance targets: preamp DC
+  operating point within 0.1 mV, 15.56 dB gain at 1 kHz, 880.5 Hz pickup corner, field-solved
+  pickup tables to 10⁻¹², and the Twin-T vibrato oscillator's rate and LED current.
+- That the CLAP, VST3 and AU builds load and render.
 
-## 📄 License & Citations
+## Credits
 
-Licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+- **electropiano** by Matthew Tyas (mtyas).
+- **Rhodes model** after Antoine Falaize & Thomas Hélie, *"Passive simulation of the nonlinear
+  port-Hamiltonian modeling of a Rhodes piano"*, J. Sound Vib. 390 (2017), and
+  [PyPHS](https://github.com/pyphs/pyphs). No PyPHS code is included; the published equations
+  are implemented independently.
+- **Wurlitzer 200A model**: [OpenWurli](https://github.com/hal0zer0/openwurli) by hal0zer0 and
+  contributors, ported from Rust to C++. Please consider supporting the project.
+- **Inter** typeface by The Inter Project Authors (SIL OFL 1.1), used in the Windows / Linux
+  editor.
 
-If you use this project in an academic or musical context, please cite:
+If you use electropiano in research, please cite:
+
 ```bibtex
 @article{falaize2017passive,
-  title={Passive simulation of the nonlinear port-Hamiltonian modeling of a Rhodes piano},
-  author={Falaize, Antoine and H{\'e}lie, Thomas},
-  journal={Journal of Sound and Vibration},
-  volume={390},
-  pages={289--309},
-  year={2017},
-  publisher={Elsevier}
+  title   = {Passive simulation of the nonlinear port-Hamiltonian modeling of a Rhodes piano},
+  author  = {Falaize, Antoine and H{\'e}lie, Thomas},
+  journal = {Journal of Sound and Vibration},
+  volume  = {390},
+  pages   = {289--309},
+  year    = {2017}
 }
 ```
+
+## Licence
+
+electropiano is free software under the **GNU General Public License v3.0 or later** — see
+[LICENSE](LICENSE). It is GPL because it incorporates OpenWurli (GPL-3.0).
