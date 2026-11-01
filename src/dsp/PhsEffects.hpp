@@ -52,6 +52,7 @@ public:
         highStateL_ = 0.0f;
         highStateR_ = 0.0f;
         preampXPrev_ = 0.0f;
+        revLpState_ = 0.0f;
 
         tremPhase_ = 0.0f;
         phaserPhase_ = 0.0f;
@@ -219,10 +220,13 @@ public:
         // =========================================================================
         const float revMix = params[kParamReverbMix];
         if (revMix > 0.001f) {
-            const float revDecay = 0.72f + 0.24f * params[kParamReverbDecay];
-            const float damp = 0.28f;
-            const float revInL = (sigL + sigR) * 0.25f;
-            const float revInR = revInL;
+            const float revDecay = 0.65f + 0.26f * params[kParamReverbDecay];
+            const float damp = 0.45f; // Absorbs high-frequency hiss on each reflection
+            const float alphaRev = 1.0f - std::exp(-2.0f * 3.14159265f * 3000.0f * dt_);
+            const float revInRaw = (sigL + sigR) * 0.25f;
+            revLpState_ += alphaRev * (revInRaw - revLpState_);
+            const float revInL = revLpState_;
+            const float revInR = revLpState_;
 
             float sumL = 0.0f;
             float sumR = 0.0f;
@@ -301,6 +305,7 @@ private:
     float highStateL_ = 0.0f;
     float highStateR_ = 0.0f;
     float preampXPrev_ = 0.0f;
+    float revLpState_ = 0.0f;
 
     float tremPhase_ = 0.0f;
     float phaserPhase_ = 0.0f;

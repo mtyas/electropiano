@@ -239,12 +239,12 @@ public:
 
             float modeT60 = baseT60;
             if (m == 1) {
-                // Iconic Rhodes/Wurli "Tine Chime / Bell" overtone (6.27 * f0):
-                // Rings out clearly for 0.8 - 3.2 seconds depending on Bell parameter
-                modeT60 = (0.75f + 2.8f * bellParam * bellParam) * (0.50f + 0.70f * keyScale_);
+                // Iconic Rhodes/Wurli "Tine Chime / Bell" overtone (~6.27 * f0):
+                // Rings clearly on attack and naturally decays over 0.3 - 1.0 seconds
+                modeT60 = (0.25f + 0.75f * bellParam * bellParam) * (0.45f + 0.55f * keyScale_);
             } else if (m == 2) {
-                // High crystalline strike ping (17.55 * f0)
-                modeT60 = (0.06f + 0.25f * bellParam) * (0.5f + 0.5f * (1.0f - keyScale_));
+                // High crystalline strike ping (~17.55 * f0): decays rapidly in 20 - 60 ms
+                modeT60 = (0.015f + 0.045f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_));
             } else if (m == 3) {
                 // 2nd harmonic structural warmth
                 modeT60 = baseT60 * (0.58f + 0.25f * toneBarParam);
@@ -261,35 +261,36 @@ public:
             if (m == 0) {
                 cStrike_[m] = 0.50f;
             } else if (m == 1) {
-                // Harder hammer tips and higher velocity excite the 6.27*f0 chime mode more strongly
-                const float chimeExcite = (0.14f + 0.32f * hardness) * (0.40f + 0.60f * shapedVel_);
+                // Harder hammer tips and higher velocity excite the 6.27*f0 chime mode cleanly
+                const float chimeExcite = (0.08f + 0.18f * hardness) * (0.40f + 0.60f * shapedVel_);
                 cStrike_[m] = -chimeExcite * (0.45f + 0.55f * std::fabs(rawShape));
             } else if (m == 2) {
-                const float pingExcite = (0.06f + 0.18f * hardness) * (0.30f + 0.70f * shapedVel_);
+                // Strike ping (decays in <40ms)
+                const float pingExcite = (0.03f + 0.08f * hardness) * (0.30f + 0.70f * shapedVel_);
                 cStrike_[m] = pingExcite * std::fabs(rawShape);
             } else if (m == 3) {
-                cStrike_[m] = rawShape * 0.22f;
+                cStrike_[m] = rawShape * 0.18f;
             } else {
-                cStrike_[m] = rawShape * 0.15f;
+                cStrike_[m] = rawShape * 0.12f;
             }
 
             // Spatial coupling at pickup tip c_m(x_pickup)
             if (m == 0) {
                 cPickup_[m] = 1.0f;
             } else if (m == 1) {
-                // Tine bell mode (~6.27 * f0): crystal-clear chime on Rhodes/Dyno, tighter on Wurli
-                const float bellAmt = (modelType == 2) ? (0.08f + 0.20f * bellParam)
-                                    : (modelType == 1) ? (0.26f + 0.54f * bellParam)
-                                                       : (0.18f + 0.42f * bellParam);
-                cPickup_[m] = bellAmt * (0.50f + 0.60f * keyScale_);
+                // Tine bell mode (~6.27 * f0): natural musical balance without harsh hiss
+                const float bellAmt = (modelType == 2) ? (0.03f + 0.08f * bellParam)
+                                    : (modelType == 1) ? (0.06f + 0.14f * bellParam)
+                                                       : (0.04f + 0.10f * bellParam);
+                cPickup_[m] = bellAmt * (0.50f + 0.50f * keyScale_);
             } else if (m == 2) {
-                const float pingAmt = (modelType == 2) ? (0.02f + 0.06f * bellParam)
-                                                       : (0.04f + 0.14f * bellParam);
-                cPickup_[m] = pingAmt * (0.45f + 0.55f * keyScale_);
+                const float pingAmt = (modelType == 2) ? (0.010f + 0.025f * bellParam)
+                                                       : (0.015f + 0.040f * bellParam);
+                cPickup_[m] = pingAmt * (0.40f + 0.60f * keyScale_);
             } else if (m == 3) {
-                cPickup_[m] = (0.06f + 0.12f * toneBarParam) * (0.3f + 0.7f * shapedVel_);
+                cPickup_[m] = (0.05f + 0.10f * toneBarParam) * (0.3f + 0.7f * shapedVel_);
             } else {
-                const float h3 = (modelType == 2) ? (0.10f + 0.18f * toneBarParam) : (0.04f + 0.08f * toneBarParam);
+                const float h3 = (modelType == 2) ? (0.08f + 0.14f * toneBarParam) : (0.03f + 0.06f * toneBarParam);
                 cPickup_[m] = h3 * (0.25f + 0.75f * shapedVel_);
             }
         }
@@ -469,27 +470,27 @@ public:
         }
 
         // =========================================================================
-        // STEP 3: Separate Body Excursion (Mode 0, 3, 4) and Cantilever Chime (Mode 1, 2)
+        // STEP 3: Integrated Tine & Tone-Bar Tip Excursion and Modal Velocity
         // =========================================================================
         const float wBody = static_cast<float>(qBeam_[0] + 0.35 * qTb_)
                           + (modeActive_[3] ? cPickup_[3] * static_cast<float>(qBeam_[3]) : 0.0f)
                           + (modeActive_[4] ? cPickup_[4] * static_cast<float>(qBeam_[4]) : 0.0f);
-        const float vBodyRaw = static_cast<float>((pBeam_[0] / massMode_[0]) + 0.35 * (pTb_ / massTb_))
-                             + (modeActive_[3] ? cPickup_[3] * static_cast<float>(pBeam_[3] / massMode_[3]) : 0.0f)
-                             + (modeActive_[4] ? cPickup_[4] * static_cast<float>(pBeam_[4] / massMode_[4]) : 0.0f);
-        const float vBodyNorm = vBodyRaw / omegaMode_[0];
 
-        // High cantilever chime modes (6.267*f0 and 17.55*f0)
-        float vChimeNorm = 0.0f;
+        // Normalize each mode by its own physical modal frequency omega_m so higher modes
+        // don't blow up by 17.5x in velocity!
+        float vTipNorm = static_cast<float>((pBeam_[0] / massMode_[0]) + 0.30 * (pTb_ / massTb_)) / omegaMode_[0];
         if (modeActive_[1]) {
-            vChimeNorm += cPickup_[1] * static_cast<float>(pBeam_[1] / (massMode_[1] * omegaMode_[0]));
+            vTipNorm += cPickup_[1] * static_cast<float>(pBeam_[1] / massMode_[1]) / omegaMode_[1];
         }
         if (modeActive_[2]) {
-            vChimeNorm += cPickup_[2] * static_cast<float>(pBeam_[2] / (massMode_[2] * omegaMode_[0]));
+            vTipNorm += cPickup_[2] * static_cast<float>(pBeam_[2] / massMode_[2]) / omegaMode_[2];
         }
-
-        const float dwBody = wBody - wBodyPrev_;
-        wBodyPrev_ = wBody;
+        if (modeActive_[3]) {
+            vTipNorm += cPickup_[3] * static_cast<float>(pBeam_[3] / massMode_[3]) / omegaMode_[3];
+        }
+        if (modeActive_[4]) {
+            vTipNorm += cPickup_[4] * static_cast<float>(pBeam_[4] / massMode_[4]) / omegaMode_[4];
+        }
 
         // =========================================================================
         // STEP 4: Nonlinear Transducer Pickup (P) via Discrete Gradient
@@ -503,38 +504,26 @@ public:
 
         float dPhiDw = 1.0f;
         if (modelType_ == 2) {
-            const float capK = evalWurlitzerCapacitance(wBody - dwBody, asymFactor, dGap);
-            const float capK1 = evalWurlitzerCapacitance(wBody, asymFactor, dGap);
-            if (std::fabs(dwBody) > 1e-6f) {
-                dPhiDw = (capK1 - capK) / dwBody;
-            } else {
-                dPhiDw = (evalWurlitzerCapacitance(wBody + 1e-4f, asymFactor, dGap)
-                        - evalWurlitzerCapacitance(wBody - 1e-4f, asymFactor, dGap)) * 5000.0f;
-            }
+            dPhiDw = evalWurlitzerCapacitanceSensitivity(wBody, asymFactor, dGap);
         } else {
             const bool dyno = (modelType_ == 1 || modelType_ == 3);
-            const float fluxK = evalRhodesMagneticFlux(wBody - dwBody, asymFactor, dGap, dyno);
-            const float fluxK1 = evalRhodesMagneticFlux(wBody, asymFactor, dGap, dyno);
-            if (std::fabs(dwBody) > 1e-6f) {
-                dPhiDw = (fluxK1 - fluxK) / dwBody;
-            } else {
-                dPhiDw = (evalRhodesMagneticFlux(wBody + 1e-4f, asymFactor, dGap, dyno)
-                        - evalRhodesMagneticFlux(wBody - 1e-4f, asymFactor, dGap, dyno)) * 5000.0f;
-            }
+            dPhiDw = evalRhodesMagneticFluxSensitivity(wBody, asymFactor, dGap, dyno);
         }
 
-        // Combine nonlinearly transduced body signal with crystalline cantilever chime modes
-        const float transducerSignal = (dPhiDw * vBodyNorm + vChimeNorm) * 0.56f;
+        // Transduced signal: dPhi/dt = (dPhi/dw) * v_tip
+        const float transducerSignal = dPhiDw * vTipNorm * 0.72f;
 
         // =========================================================================
-        // STEP 5: Pickup RLC Coil / Capacitive Load Filter (Passive SVF)
+        // STEP 5: Pickup RLC Coil / Capacitive Load Filter (Passive 2-Pole SVF)
         // =========================================================================
+        // Fully processes the transducer signal through the coil's inductive resonance
+        // and rolls off high-frequency hiss at 12 dB/octave above 4.5 kHz!
         const float pickupQParam = params[kParamPickupResonance];
-        const float resFreq = (modelType_ == 1) ? (3000.0f + 1800.0f * pickupQParam)
-                            : (modelType_ == 2) ? (2000.0f + 1500.0f * pickupQParam)
-                                                : (2400.0f + 1600.0f * pickupQParam);
+        const float resFreq = (modelType_ == 1) ? (3200.0f + 1600.0f * pickupQParam)
+                            : (modelType_ == 2) ? (2400.0f + 1400.0f * pickupQParam)
+                                                : (2700.0f + 1500.0f * pickupQParam);
         const float g = std::tan(kPi * std::min(resFreq, 0.42f * fs_) * dt_);
-        const float kDamp = 1.35f - 0.85f * pickupQParam;
+        const float kDamp = 1.40f - 0.80f * pickupQParam;
         const float a1 = 1.0f / (1.0f + g * (g + kDamp));
         const float a2 = g * a1;
         const float a3 = g * a2;
@@ -545,20 +534,18 @@ public:
         coilBPState_ = 2.0f * v1 - coilBPState_;
         coilLPState_ = 2.0f * v2 - coilLPState_;
 
-        // Keep broadband chime clear while shaping warm coil resonance (lowpass + presence peak)
-        float pickupOut = 0.25f * transducerSignal + 0.75f * (v2 + 0.38f * pickupQParam * v1);
+        // Full low-pass + presence bandpass combination (100% coil filtered, zero dry noise bypass!)
+        float pickupOut = v2 + 0.28f * pickupQParam * v1;
 
-        // =========================================================================
-        // STEP 6: Subtle Mechanical Felt/Key Action Transient (Smooth Raised Cosine)
-        // =========================================================================
-        if (ageSamples_ < static_cast<uint64_t>(0.0035f * fs_)) {
+        // Subtle mechanical action thud on strike (only 2 ms)
+        if (ageSamples_ < static_cast<uint64_t>(0.0025f * fs_)) {
             const float tSec = static_cast<float>(ageSamples_) * dt_;
-            const float env = std::exp(-tSec / 0.0009f) * std::sin(kTwoPi * 360.0f * tSec);
-            pickupOut += env * (0.012f * shapedVel_ * lastKeyNoiseParam_);
+            const float env = std::exp(-tSec / 0.0006f) * std::sin(kTwoPi * 280.0f * tSec);
+            pickupOut += env * (0.006f * shapedVel_ * lastKeyNoiseParam_);
         }
 
-        // High-pass DC blocker at 22 Hz
-        const float Rdc = 1.0f - (kTwoPi * 22.0f / fs_);
+        // High-pass DC blocker at 20 Hz
+        const float Rdc = 1.0f - (kTwoPi * 20.0f / fs_);
         const float yDc = pickupOut - dcBlockX1_ + Rdc * dcBlockY1_;
         dcBlockX1_ = pickupOut;
         dcBlockY1_ = yDc;
@@ -567,7 +554,7 @@ public:
         telemetry_.dissipatedPower = beamDissPower + feltDissPower;
         telemetry_.inputPower = inputPower;
         telemetry_.tipDisplacement = wBody;
-        telemetry_.tipVelocity = vBodyNorm + vChimeNorm;
+        telemetry_.tipVelocity = vTipNorm;
         telemetry_.hammerCompression = xiPrev_;
         telemetry_.pickupOutput = yDc;
 
@@ -584,39 +571,29 @@ public:
     uint64_t getAge() const { return ageSamples_; }
     const VoiceTelemetry& getTelemetry() const { return telemetry_; }
 
-    // Monotonic + asymmetric Port-Hamiltonian magnetic flux linkage Phi(w):
-    // Exact analytic antiderivative of dPhi/dw = 1 + a1 * u / sqrt(1 + 0.5*u^2) + a2 * u^2 / (1 + 0.45*u^2)
-    // - Linear term (1) gives pure warm fundamental f0 at soft velocities
-    // - Asymmetric proximity term (+a1 * u) produces 2nd-harmonic octave bloom via Faraday dPhi/dt
-    // - Symmetric proximity term (+a2 * u^2) reinforces f0 AND generates rich 3rd-harmonic Rhodes bark!
-    static inline float evalRhodesMagneticFlux(float w, float asym, float dGap, bool dynoMode) {
+    // Monotonic + asymmetric Port-Hamiltonian magnetic flux sensitivity dPhi/dw:
+    // C-infinity analytic evaluation eliminating finite-difference noise at zero crossings!
+    // - Linear baseline (1.0) preserves clean, crystal-clear fundamental tone f0
+    // - Odd asymmetric term produces warm 2nd-harmonic octave bloom
+    // - Even quadratic term produces punchy 3rd-harmonic Rhodes pickup bark
+    static inline float evalRhodesMagneticFluxSensitivity(float w, float asym, float dGap, bool dynoMode) {
         const float gap = std::max(0.20f, dGap);
         const float u = w / gap;
         const float u2 = u * u;
-        const float a1 = asym * (dynoMode ? 0.95f : 0.78f);
-        const float a2 = dynoMode ? 0.85f : 0.58f;
-        constexpr float c = 0.45f;
-        constexpr float sqrtC = 0.67082039f;
-        const float intLinear = u;
-        const float intEven = 2.0f * a1 * (std::sqrt(1.0f + 0.5f * u2) - 1.0f);
-        const float intOdd = (a2 / c) * (u - std::atan(sqrtC * u) / sqrtC);
-        return gap * (intLinear + intEven + intOdd);
+        const float a1 = asym * (dynoMode ? 0.85f : 0.65f);
+        const float a2 = dynoMode ? 0.75f : 0.48f;
+        return 1.0f + a1 * (u / std::sqrt(1.0f + 0.5f * u2)) + a2 * (u2 / (1.0f + 0.45f * u2));
     }
 
-    // Wurlitzer 200A polarized electrostatic reed pickup linkage:
-    // Stronger asymmetric & cubic capacitive proximity curve for signature reedy 2nd/3rd/4th harmonic bite!
-    static inline float evalWurlitzerCapacitance(float w, float asym, float g0) {
+    // Wurlitzer 200A polarized electrostatic reed pickup sensitivity dC/dw:
+    // Smooth asymmetric capacitive sensitivity for iconic reedy bite without white noise
+    static inline float evalWurlitzerCapacitanceSensitivity(float w, float asym, float g0) {
         const float gap = std::max(0.20f, g0);
         const float u = w / gap;
         const float u2 = u * u;
-        const float a1 = 0.65f + 0.70f * asym;
-        const float a2 = 0.95f;
-        constexpr float c = 0.55f;
-        constexpr float sqrtC = 0.74161985f;
-        const float intLinear = u;
-        const float intEven = 2.0f * a1 * (std::sqrt(1.0f + 0.65f * u2) - 1.0f) / 0.65f * 0.5f;
-        const float intOdd = (a2 / c) * (u - std::atan(sqrtC * u) / sqrtC);
-        return gap * (intLinear + intEven + intOdd);
+        const float a1 = 0.55f + 0.60f * asym;
+        const float a2 = 0.85f;
+        return 1.0f + a1 * (u / std::sqrt(1.0f + 0.65f * u2)) + a2 * (u2 / (1.0f + 0.55f * u2));
     }
 
 private:
