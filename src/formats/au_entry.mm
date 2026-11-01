@@ -60,7 +60,7 @@ namespace {
 static const UInt32 kAuType         = 'aumu';
 static const UInt32 kAuSubType      = 'PhsE';
 static const UInt32 kAuManufacturer = 'PyPH';
-static const UInt32 kAuVersion      = 0x00010000;
+static const UInt32 kAuVersion      = 0x00010100; // v1.1.0
 
 struct PropListener {
     AudioUnitPropertyID id;

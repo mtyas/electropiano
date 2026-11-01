@@ -33,7 +33,7 @@ static const clap_plugin_descriptor_t kClapDescriptor = {
     "https://github.com/pyphs/pyphs",
     "https://github.com/pyphs/pyphs",
     "https://github.com/pyphs/pyphs",
-    "1.0.0",
+    "1.1.0",
     "Port-Hamiltonian Rhodes & Wurlitzer Electro-Mechanical Piano Simulator",
     kClapFeatures
 };

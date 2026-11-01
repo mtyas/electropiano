@@ -539,7 +539,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         std::snprintf(info->vendor, sizeof(info->vendor), "PyPHS Physical Modeling");
-        std::snprintf(info->version, sizeof(info->version), "1.0.0");
+        std::snprintf(info->version, sizeof(info->version), "1.1.0");
         std::snprintf(info->sdkVersion, sizeof(info->sdkVersion), "VST 3.7.8");
         return kResultOk;
     }
@@ -554,7 +554,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         copyAsciiToUtf16(info->vendor, "PyPHS Physical Modeling", 64);
-        copyAsciiToUtf16(info->version, "1.0.0", 64);
+        copyAsciiToUtf16(info->version, "1.1.0", 64);
         copyAsciiToUtf16(info->sdkVersion, "VST 3.7.8", 64);
         return kResultOk;
     }

@@ -36,8 +36,8 @@ clap: src/formats/clap_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.clap</string>' \
 		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.0.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.0.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(CLAP_BUNDLE)/Contents/Info.plist"
@@ -60,8 +60,8 @@ vst3: src/formats/vst3_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.vst3</string>' \
 		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.0.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.0.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
 		'  <key>CSResourcesFileMapped</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(VST3_BUNDLE)/Contents/Info.plist"
@@ -84,8 +84,8 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.audiounit</string>' \
 		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
 		'  <key>CFBundlePackageType</key><string>BNDL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.0.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.0.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
 		'  <key>AudioComponents</key>' \
 		'  <array>' \
 		'    <dict>' \
@@ -95,7 +95,7 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'      <key>manufacturer</key><string>PyPH</string>' \
 		'      <key>subtype</key><string>PhsE</string>' \
 		'      <key>type</key><string>aumu</string>' \
-		'      <key>version</key><integer>65536</integer>' \
+		'      <key>version</key><integer>65792</integer>' \
 		'      <key>sandboxSafe</key><true/>' \
 		'    </dict>' \
 		'  </array>' \
@@ -120,8 +120,8 @@ app: src/formats/standalone_app.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 		'  <key>CFBundleIdentifier</key><string>org.pyphs.pianoelectro.standalone</string>' \
 		'  <key>CFBundleName</key><string>PyPHS Electric Piano</string>' \
 		'  <key>CFBundlePackageType</key><string>APPL</string>' \
-		'  <key>CFBundleShortVersionString</key><string>1.0.0</string>' \
-		'  <key>CFBundleVersion</key><string>1.0.0</string>' \
+		'  <key>CFBundleShortVersionString</key><string>1.1.0</string>' \
+		'  <key>CFBundleVersion</key><string>1.1.0</string>' \
 		'  <key>NSHighResolutionCapable</key><true/>' \
 		'</dict>' \
 		'</plist>' > "$(APP_BUNDLE)/Contents/Info.plist"
