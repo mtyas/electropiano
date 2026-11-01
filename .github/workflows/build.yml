@@ -13,7 +13,7 @@ jobs:
   # macOS: CLAP, VST3, AU, standalone app (Universal: arm64 + x86_64)
   # ===========================================================================
   build-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
