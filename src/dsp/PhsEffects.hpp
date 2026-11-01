@@ -85,27 +85,28 @@ public:
         // 1. Preamp Saturation (Smooth Continuous Tube / JFET Waveshaper)
         // =========================================================================
         const float driveParam = params[kParamPreampDrive];
-        const float driveGain = 1.0f + 4.5f * driveParam * driveParam;
+        const float driveGain = 1.0f + 6.5f * driveParam * driveParam;
         const float xDriven = monoIn * driveGain;
 
         // Clean algebraic soft saturation with warm second-harmonic bloom:
         // (No discrete difference quotient -> zero floating point cancellation hash!)
         const float x2 = xDriven * xDriven;
-        const float asym = 0.08f * driveParam * (x2 / (1.0f + 0.6f * x2));
+        const float asym = 0.12f * driveParam * (x2 / (1.0f + 0.6f * x2));
         float preampOut = (xDriven + asym) / std::sqrt(1.0f + 0.75f * x2);
-        preampOut *= 1.0f / std::sqrt(1.0f + 0.5f * (driveGain - 1.0f));
+        preampOut *= 1.0f / std::sqrt(1.0f + 0.45f * (driveGain - 1.0f));
 
         // =========================================================================
         // 2. Passive Baxandall Bass & Treble Tone Stack
         // =========================================================================
-        const float bassDb = (params[kParamBassBoost] - 0.5f) * 20.0f;
-        const float trebleDb = (params[kParamTrebleBoost] - 0.5f) * 20.0f;
+        // Wide musical range (+/- 16 dB) across deep 140 Hz sub-bass and 2800 Hz crystalline chime
+        const float bassDb = (params[kParamBassBoost] - 0.5f) * 32.0f;
+        const float trebleDb = (params[kParamTrebleBoost] - 0.5f) * 32.0f;
         const float bassGain = std::pow(10.0f, bassDb / 20.0f) - 1.0f;
         const float trebleGain = std::pow(10.0f, trebleDb / 20.0f) - 1.0f;
 
-        // One-pole crossover filters at 180 Hz (bass shelf) and 2200 Hz (treble shelf)
-        const float alphaLow = 1.0f - std::exp(-2.0f * 3.14159265f * 180.0f * dt_);
-        const float alphaHigh = 1.0f - std::exp(-2.0f * 3.14159265f * 2200.0f * dt_);
+        // One-pole crossover filters at 140 Hz (bass shelf) and 2800 Hz (treble shelf)
+        const float alphaLow = 1.0f - std::exp(-2.0f * 3.14159265f * 140.0f * dt_);
+        const float alphaHigh = 1.0f - std::exp(-2.0f * 3.14159265f * 2800.0f * dt_);
 
         lowStateL_ += alphaLow * (preampOut - lowStateL_);
         highStateL_ += alphaHigh * (preampOut - highStateL_);
@@ -215,8 +216,8 @@ public:
         // =========================================================================
         const float revMix = params[kParamReverbMix];
         if (revMix > 0.001f) {
-            const float revDecay = 0.45f + 0.35f * params[kParamReverbDecay];
-            const float damp = 0.62f; // Warm high-frequency acoustic damping
+            const float revDecay = 0.35f + 0.58f * params[kParamReverbDecay];
+            const float damp = 0.58f; // Warm high-frequency acoustic damping
             const float alphaRev = 1.0f - std::exp(-2.0f * 3.14159265f * 2000.0f * dt_);
             const float revInRaw = (sigL + sigR) * 0.15f;
             revLpState_ += alphaRev * (revInRaw - revLpState_);
@@ -259,8 +260,8 @@ public:
                 sumR = newR;
             }
 
-            sigL = sigL * (1.0f - 0.35f * revMix) + sumL * (0.35f * revMix);
-            sigR = sigR * (1.0f - 0.35f * revMix) + sumR * (0.35f * revMix);
+            sigL = sigL * (1.0f - 0.50f * revMix) + sumL * (0.65f * revMix);
+            sigR = sigR * (1.0f - 0.50f * revMix) + sumR * (0.65f * revMix);
         }
 
         // Master output gain + gentle safety soft-clipper
