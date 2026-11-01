@@ -330,14 +330,21 @@ typedef struct clap_plugin_state {
 
 // Extensions: gui
 static const char CLAP_EXT_GUI[] = "clap.gui";
+static const char CLAP_WINDOW_API_WIN32[] = "win32";
 static const char CLAP_WINDOW_API_COCOA[] = "cocoa";
+static const char CLAP_WINDOW_API_X11[] = "x11";
+static const char CLAP_WINDOW_API_WAYLAND[] = "wayland";
+
+typedef void *clap_hwnd;
+typedef void *clap_nsview;
+typedef unsigned long clap_xwnd;
 
 typedef struct clap_window {
     const char *api;
     union {
-        void *cocoa;
-        void *x11;
-        void *win32;
+        clap_nsview cocoa;
+        clap_xwnd x11;
+        clap_hwnd win32;
         void *ptr;
     };
 } clap_window_t;

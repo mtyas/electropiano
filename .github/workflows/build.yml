@@ -52,9 +52,13 @@ jobs:
         shell: bash
         run: |
           # Compiler errors are re-emitted as annotations so they are visible without signing in
-          set -o pipefail
-          cmake --build build --config Release --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port 2>&1 | tee build.log || {
-            grep -E "error|Error" build.log | head -40 | sed 's/^/::error::/'; exit 1; }
+          status=0
+          for t in electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port; do
+            cmake --build build --config Release --target $t 2>&1 | tee -a build.log || status=1
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+          done
+          if [ $status != 0 ]; then
+            grep -E "error [A-Z]+[0-9]+|fatal error" build.log | sed -E 's/ \[[^]]*\]$//' | sort -u | head -40 | sed 's/^/::error::/'; exit 1; fi
 
       - name: Test
         run: |
@@ -96,8 +100,8 @@ jobs:
         run: |
           # Compiler errors are re-emitted as annotations so they are visible without signing in
           set -o pipefail
-          cmake --build build --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port -j$(nproc) 2>&1 | tee build.log || {
-            grep -E "error|Error" build.log | head -40 | sed 's/^/::error::/'; exit 1; }
+          cmake --build build --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port -j$(nproc) -- -k 2>&1 | tee build.log || {
+            grep -E "error:" build.log | sort -u | head -40 | sed 's/^/::error::/'; exit 1; }
 
       - name: Test
         run: |
