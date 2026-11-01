@@ -49,7 +49,12 @@ jobs:
         run: cmake -B build -G "Visual Studio 17 2022" -A x64
 
       - name: Build
-        run: cmake --build build --config Release --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port
+        shell: bash
+        run: |
+          # Compiler errors are re-emitted as annotations so they are visible without signing in
+          set -o pipefail
+          cmake --build build --config Release --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port 2>&1 | tee build.log || {
+            grep -E "error|Error" build.log | head -40 | sed 's/^/::error::/'; exit 1; }
 
       - name: Test
         run: |
@@ -88,7 +93,11 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port -j$(nproc)
+        run: |
+          # Compiler errors are re-emitted as annotations so they are visible without signing in
+          set -o pipefail
+          cmake --build build --target electropiano_CLAP electropiano_VST3 test_phs_piano test_wurli_port -j$(nproc) 2>&1 | tee build.log || {
+            grep -E "error|Error" build.log | head -40 | sed 's/^/::error::/'; exit 1; }
 
       - name: Test
         run: |
