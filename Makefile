@@ -22,7 +22,8 @@ all: clap vst3 au app $(TEST_BIN)
 
 # 1. CLAP Plugin Bundle (.clap)
 clap: src/formats/clap_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) include/clap/clap.h
-	@mkdir -p "$(CLAP_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(CLAP_BUNDLE)/Contents/MacOS" "$(CLAP_BUNDLE)/Contents/Resources"
+	@cp -f resources/gui/*.png "$(CLAP_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	$(CXX) $(OBJCXXFLAGS) -bundle -DPHS_VIEW_CLASS_NAME=PhsEditorView_CLAP \
 		src/formats/clap_entry.mm $(GUI_SOURCES) \
 		$(FRAMEWORKS) -o "$(CLAP_BUNDLE)/Contents/MacOS/$(PLUGIN_NAME)"
@@ -46,7 +47,8 @@ clap: src/formats/clap_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 
 # 2. VST3 Plugin Bundle (.vst3)
 vst3: src/formats/vst3_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) include/vst3/vst3_c_api.h
-	@mkdir -p "$(VST3_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(VST3_BUNDLE)/Contents/MacOS" "$(VST3_BUNDLE)/Contents/Resources"
+	@cp -f resources/gui/*.png "$(VST3_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	$(CXX) $(OBJCXXFLAGS) -bundle -DPHS_VIEW_CLASS_NAME=PhsEditorView_VST3 \
 		src/formats/vst3_entry.mm $(GUI_SOURCES) \
 		$(FRAMEWORKS) -o "$(VST3_BUNDLE)/Contents/MacOS/$(PLUGIN_NAME)"
@@ -70,7 +72,8 @@ vst3: src/formats/vst3_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS) inc
 
 # 3. AudioUnit v2 Plugin Bundle (.component)
 au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
-	@mkdir -p "$(AU_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(AU_BUNDLE)/Contents/MacOS" "$(AU_BUNDLE)/Contents/Resources"
+	@cp -f resources/gui/*.png "$(AU_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	$(CXX) $(OBJCXXFLAGS) -bundle -DPHS_VIEW_CLASS_NAME=PhsEditorView_AU \
 		src/formats/au_entry.mm $(GUI_SOURCES) \
 		$(FRAMEWORKS) -o "$(AU_BUNDLE)/Contents/MacOS/$(PLUGIN_NAME)"
@@ -106,7 +109,8 @@ au: src/formats/au_entry.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
 
 # 4. Standalone macOS App (.app)
 app: src/formats/standalone_app.mm $(GUI_SOURCES) $(DSP_HEADERS) $(GUI_HEADERS)
-	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
+	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
+	@cp -f resources/gui/*.png "$(APP_BUNDLE)/Contents/Resources/" 2>/dev/null || true
 	$(CXX) $(OBJCXXFLAGS) -DPHS_VIEW_CLASS_NAME=PhsEditorView_Standalone \
 		src/formats/standalone_app.mm $(GUI_SOURCES) \
 		$(FRAMEWORKS) -o "$(APP_BUNDLE)/Contents/MacOS/$(PLUGIN_NAME)"

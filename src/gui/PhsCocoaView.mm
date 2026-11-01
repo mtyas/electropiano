@@ -83,6 +83,12 @@ static NSString* formatParamValue(uint32_t id, float norm) {
 
 } // namespace
 
+static NSImage* gKnobFilmstrip = nil;
+static NSImage* gSliderCap = nil;
+static NSImage* gRockerActive = nil;
+static NSImage* gRockerInactive = nil;
+static NSImage* gPanelCard = nil;
+
 @interface PHS_VIEW_CLASS_NAME : NSView {
 @public
     phs::PhsSynthEngine* engine_;
@@ -130,6 +136,45 @@ static NSString* formatParamValue(uint32_t id, float norm) {
 - (void)openSavePresetDialog;
 @end
 
+static void init3dAssets() {
+    static bool initialized = false;
+    if (initialized) return;
+    initialized = true;
+
+    auto findAsset = [](NSString* name) -> NSString* {
+        NSString* p1 = [NSString stringWithFormat:@"resources/gui/%@.png", name];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p1]) return p1;
+
+        NSBundle* b = [NSBundle bundleForClass:[PHS_VIEW_CLASS_NAME class]];
+        NSString* p2 = [b pathForResource:name ofType:@"png"];
+        if (p2 && [[NSFileManager defaultManager] fileExistsAtPath:p2]) return p2;
+
+        NSString* execPath = [[b executablePath] stringByDeletingLastPathComponent];
+        NSString* p3 = [[execPath stringByAppendingPathComponent:@"../Resources"] stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.png", name]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p3]) return p3;
+
+        NSString* p4 = [NSString stringWithFormat:@"/Users/matthewtyas/Documents/antigravity/pianoelectro/resources/gui/%@.png", name];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p4]) return p4;
+
+        return nil;
+    };
+
+    NSString* kPath = findAsset(@"knob_filmstrip");
+    if (kPath) gKnobFilmstrip = [[NSImage alloc] initWithContentsOfFile:kPath];
+
+    NSString* sPath = findAsset(@"slider_cap_3d");
+    if (sPath) gSliderCap = [[NSImage alloc] initWithContentsOfFile:sPath];
+
+    NSString* raPath = findAsset(@"rocker_active_3d");
+    if (raPath) gRockerActive = [[NSImage alloc] initWithContentsOfFile:raPath];
+
+    NSString* riPath = findAsset(@"rocker_inactive_3d");
+    if (riPath) gRockerInactive = [[NSImage alloc] initWithContentsOfFile:riPath];
+
+    NSString* pcPath = findAsset(@"panel_card_3d");
+    if (pcPath) gPanelCard = [[NSImage alloc] initWithContentsOfFile:pcPath];
+}
+
 @implementation PHS_VIEW_CLASS_NAME
 
 - (instancetype)initWithFrame:(NSRect)frame
@@ -148,6 +193,7 @@ static NSString* formatParamValue(uint32_t id, float norm) {
         lastClickedKnobIdx_ = -1;
         animFrameCounter_ = 0;
 
+        init3dAssets();
         [self setupLayout];
 
         redrawTimer_ = [[NSTimer scheduledTimerWithTimeInterval:(1.0 / 30.0)
@@ -390,22 +436,51 @@ static NSString* formatParamValue(uint32_t id, float norm) {
 
         CGContextSaveGState(ctx);
         if (active) {
-            CGContextSetRGBFillColor(ctx, 0.16f, 0.32f, 0.46f, 0.95f);
-            CGContextSetRGBStrokeColor(ctx, 0.45f, 0.85f, 1.0f, 0.95f);
-            CGContextSetShadowWithColor(ctx, CGSizeMake(0, 0), 6.0, [[NSColor colorWithCalibratedRed:0.3 green:0.8 blue:1.0 alpha:0.5] CGColor]);
-        } else {
-            CGContextSetRGBFillColor(ctx, 0.11f, 0.12f, 0.15f, 0.9f);
-            CGContextSetRGBStrokeColor(ctx, 0.24f, 0.27f, 0.33f, 0.7f);
-        }
-        CGPathRef round = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
-        CGContextAddPath(ctx, round);
-        CGContextDrawPath(ctx, kCGPathFillStroke);
-        CGPathRelease(round);
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            const CGFloat actColors[8] = {
+                0.22f, 0.45f, 0.62f, 1.0f,
+                0.12f, 0.25f, 0.38f, 1.0f
+            };
+            CGGradientRef aGrad = CGGradientCreateWithColorComponents(cs, actColors, nullptr, 2);
+            CGPathRef round = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
+            CGContextAddPath(ctx, round);
+            CGContextClip(ctx);
+            CGContextDrawLinearGradient(ctx, aGrad, CGPointMake(r.origin.x, r.origin.y + r.size.height), CGPointMake(r.origin.x, r.origin.y), 0);
+            CGGradientRelease(aGrad);
+            CGColorSpaceRelease(cs);
+            CGContextResetClip(ctx);
 
-        // Active Jewel Lamp
-        if (active) {
+            CGContextSetRGBStrokeColor(ctx, 0.45f, 0.88f, 1.0f, 0.95f);
+            CGContextSetLineWidth(ctx, 1.2f);
+            CGPathRef pBorder = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
+            CGContextAddPath(ctx, pBorder);
+            CGContextStrokePath(ctx);
+            CGPathRelease(pBorder);
+
+            // Active Glowing Cyan Jewel Lamp
             CGContextSetRGBFillColor(ctx, 0.40f, 0.95f, 1.0f, 1.0f);
-            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 6.0, r.origin.y + 11.0, 6.0, 6.0));
+            CGContextFillEllipseInRect(ctx, CGRectMake(r.origin.x + 8.0, r.origin.y + 11.0, 6.0, 6.0));
+        } else {
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            const CGFloat inactColors[8] = {
+                0.16f, 0.17f, 0.21f, 1.0f,
+                0.09f, 0.10f, 0.12f, 1.0f
+            };
+            CGGradientRef iGrad = CGGradientCreateWithColorComponents(cs, inactColors, nullptr, 2);
+            CGPathRef round = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
+            CGContextAddPath(ctx, round);
+            CGContextClip(ctx);
+            CGContextDrawLinearGradient(ctx, iGrad, CGPointMake(r.origin.x, r.origin.y + r.size.height), CGPointMake(r.origin.x, r.origin.y), 0);
+            CGGradientRelease(iGrad);
+            CGColorSpaceRelease(cs);
+            CGContextResetClip(ctx);
+
+            CGContextSetRGBStrokeColor(ctx, 0.25f, 0.28f, 0.34f, 0.8f);
+            CGContextSetLineWidth(ctx, 1.0f);
+            CGPathRef pBorder = CGPathCreateWithRoundedRect(NSRectToCGRect(r), 4.0, 4.0, nullptr);
+            CGContextAddPath(ctx, pBorder);
+            CGContextStrokePath(ctx);
+            CGPathRelease(pBorder);
         }
 
         NSDictionary* textAttrs = @{
@@ -804,36 +879,49 @@ static NSString* formatParamValue(uint32_t id, float norm) {
     CGContextAddArc(ctx, cx, cy, radius + 4.0, curAngle, startAngle, 0);
     CGContextStrokePath(ctx);
 
-    // 3. Fender Rhodes Silver-Face Cap Knob Body (y: 18 .. 50)
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    const CGFloat capColors[8] = {
-        0.34f, 0.37f, 0.44f, 1.0f,
-        0.11f, 0.12f, 0.14f, 1.0f
-    };
-    CGGradientRef capGrad = CGGradientCreateWithColorComponents(cs, capColors, nullptr, 2);
-    CGContextSaveGState(ctx);
-    CGContextAddArc(ctx, cx, cy, radius, 0, 2.0 * M_PI, 0);
-    CGContextClip(ctx);
-    CGContextDrawLinearGradient(ctx, capGrad, CGPointMake(cx - radius, cy + radius), CGPointMake(cx + radius, cy - radius), 0);
-    CGGradientRelease(capGrad);
-    CGColorSpaceRelease(cs);
-    CGContextRestoreGState(ctx);
+    // 3. 3D Blender Raytraced Knob Body (y: 15 .. 53)
+    if (gKnobFilmstrip) {
+        const int numFrames = 64;
+        const int frameW = 96;
+        const int frameH = 96;
+        const int totalH = frameH * numFrames;
+        const int frameIdx = std::clamp(static_cast<int>(std::round(norm * 63.0f)), 0, 63);
+        const CGFloat srcY = totalH - (frameIdx + 1) * frameH;
+        const NSRect srcRect = NSMakeRect(0, srcY, frameW, frameH);
+        const CGFloat knobSize = 38.0;
+        const NSRect knobDest = NSMakeRect(cx - knobSize * 0.5, cy - knobSize * 0.5, knobSize, knobSize);
+        [gKnobFilmstrip drawInRect:knobDest fromRect:srcRect operation:NSCompositingOperationSourceOver fraction:1.0];
+    } else {
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        const CGFloat capColors[8] = {
+            0.34f, 0.37f, 0.44f, 1.0f,
+            0.11f, 0.12f, 0.14f, 1.0f
+        };
+        CGGradientRef capGrad = CGGradientCreateWithColorComponents(cs, capColors, nullptr, 2);
+        CGContextSaveGState(ctx);
+        CGContextAddArc(ctx, cx, cy, radius, 0, 2.0 * M_PI, 0);
+        CGContextClip(ctx);
+        CGContextDrawLinearGradient(ctx, capGrad, CGPointMake(cx - radius, cy + radius), CGPointMake(cx + radius, cy - radius), 0);
+        CGGradientRelease(capGrad);
+        CGColorSpaceRelease(cs);
+        CGContextRestoreGState(ctx);
 
-    // Outer Silver Rim
-    CGContextSetRGBStrokeColor(ctx, 0.48f, 0.52f, 0.60f, 0.95f);
-    CGContextSetLineWidth(ctx, 1.2f);
-    CGContextAddArc(ctx, cx, cy, radius, 0, 2.0 * M_PI, 0);
-    CGContextStrokePath(ctx);
+        // Outer Silver Rim
+        CGContextSetRGBStrokeColor(ctx, 0.48f, 0.52f, 0.60f, 0.95f);
+        CGContextSetLineWidth(ctx, 1.2f);
+        CGContextAddArc(ctx, cx, cy, radius, 0, 2.0 * M_PI, 0);
+        CGContextStrokePath(ctx);
 
-    // High-Contrast Indicator Pointer Line
-    CGContextSetRGBStrokeColor(ctx, isArmed ? 1.0f : 0.95f, isArmed ? 0.85f : 0.95f, isArmed ? 0.2f : 0.95f, 1.0f);
-    CGContextSetLineWidth(ctx, 2.2f);
-    CGContextBeginPath(ctx);
-    const CGFloat indLen1 = radius * 0.25f;
-    const CGFloat indLen2 = radius * 0.90f;
-    CGContextMoveToPoint(ctx, cx + indLen1 * std::cos(curAngle), cy + indLen1 * std::sin(curAngle));
-    CGContextAddLineToPoint(ctx, cx + indLen2 * std::cos(curAngle), cy + indLen2 * std::sin(curAngle));
-    CGContextStrokePath(ctx);
+        // High-Contrast Indicator Pointer Line
+        CGContextSetRGBStrokeColor(ctx, isArmed ? 1.0f : 0.95f, isArmed ? 0.85f : 0.95f, isArmed ? 0.2f : 0.95f, 1.0f);
+        CGContextSetLineWidth(ctx, 2.2f);
+        CGContextBeginPath(ctx);
+        const CGFloat indLen1 = radius * 0.25f;
+        const CGFloat indLen2 = radius * 0.90f;
+        CGContextMoveToPoint(ctx, cx + indLen1 * std::cos(curAngle), cy + indLen1 * std::sin(curAngle));
+        CGContextAddLineToPoint(ctx, cx + indLen2 * std::cos(curAngle), cy + indLen2 * std::sin(curAngle));
+        CGContextStrokePath(ctx);
+    }
 
     // 4. Parameter Value Pill (Below Knob, y: 3 .. 16)
     NSString* valStr = formatParamValue(paramId, norm);
@@ -937,13 +1025,18 @@ static NSString* formatParamValue(uint32_t id, float norm) {
         CGContextDrawPath(ctx, kCGPathFillStroke);
         CGPathRelease(wp);
 
-        // Ribbed Wheel Body
-        const CGFloat wy = r.origin.y + 4.0 + val * (r.size.height - 22.0);
-        CGContextSetRGBFillColor(ctx, 0.42f, 0.46f, 0.54f, 0.95f);
-        CGContextFillRect(ctx, CGRectMake(r.origin.x + 2.0, wy, r.size.width - 4.0, 14.0));
-        CGContextSetRGBStrokeColor(ctx, 0.85f, 0.88f, 0.95f, 0.9f);
-        CGContextSetLineWidth(ctx, 1.2f);
-        CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(r.origin.x + 3.0, wy + 7.0), CGPointMake(r.origin.x + r.size.width - 3.0, wy + 7.0)}, 2);
+        // Ribbed 3D Slider Cap / Wheel Body
+        const CGFloat wy = r.origin.y + 4.0 + val * (r.size.height - 24.0);
+        if (gSliderCap) {
+            const NSRect capDest = NSMakeRect(r.origin.x - 3.0, wy - 3.0, r.size.width + 6.0, 20.0);
+            [gSliderCap drawInRect:capDest fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
+        } else {
+            CGContextSetRGBFillColor(ctx, 0.42f, 0.46f, 0.54f, 0.95f);
+            CGContextFillRect(ctx, CGRectMake(r.origin.x + 2.0, wy, r.size.width - 4.0, 14.0));
+            CGContextSetRGBStrokeColor(ctx, 0.85f, 0.88f, 0.95f, 0.9f);
+            CGContextSetLineWidth(ctx, 1.2f);
+            CGContextStrokeLineSegments(ctx, (CGPoint[]){CGPointMake(r.origin.x + 3.0, wy + 7.0), CGPointMake(r.origin.x + r.size.width - 3.0, wy + 7.0)}, 2);
+        }
 
         NSDictionary* wAttrs = @{
             NSFontAttributeName: [NSFont boldSystemFontOfSize:7.5],

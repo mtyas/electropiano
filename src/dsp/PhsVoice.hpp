@@ -70,6 +70,8 @@ public:
         active_ = false;
         releasing_ = false;
         sustained_ = false;
+        damperAmount_ = 0.0f;
+        releaseEnv_ = 1.0f;
         midiNote_ = -1;
         ageSamples_ = 0;
 
@@ -101,6 +103,8 @@ public:
         active_ = true;
         releasing_ = false;
         sustained_ = false;
+        damperAmount_ = 0.0f;
+        releaseEnv_ = 1.0f;
         ageSamples_ = 0;
 
         const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
@@ -328,7 +332,15 @@ public:
             }
         }
 
-        const float damperExtraDamp = releasing_ ? ((modelType_ == 2) ? 65.0f : 42.0f) : 0.0f;
+        // Damper felt engagement: smooth continuous landing over 12 ms (eliminates note-off clicks & state acceleration spikes!)
+        if (releasing_) {
+            damperAmount_ = std::min(1.0f, damperAmount_ + (dt_ / 0.012f));
+            releaseEnv_ *= std::exp(-dt_ / 0.055f);
+        } else {
+            damperAmount_ = 0.0f;
+            releaseEnv_ = 1.0f;
+        }
+        const float damperExtraDamp = damperAmount_ * ((modelType_ == 2) ? 75.0f : 55.0f);
 
         // =========================================================================
         // STEP 1: Port-Hamiltonian Hammer-Beam Impact (H <-> B)
@@ -544,7 +556,9 @@ public:
             pickupOut += env * (0.006f * shapedVel_ * lastKeyNoiseParam_);
         }
 
-        // High-pass DC blocker at 20 Hz
+        // Apply smooth release envelope and DC blocker
+        pickupOut *= releaseEnv_;
+
         const float Rdc = 1.0f - (kTwoPi * 20.0f / fs_);
         const float yDc = pickupOut - dcBlockX1_ + Rdc * dcBlockY1_;
         dcBlockX1_ = pickupOut;
@@ -558,7 +572,9 @@ public:
         telemetry_.hammerCompression = xiPrev_;
         telemetry_.pickupOutput = yDc;
 
-        if (hammerDetached_ && ageSamples_ > 256 && beamEnergy < 1e-9f && std::fabs(yDc) < 1e-6f) {
+        if (releasing_ && releaseEnv_ < 1e-4f) {
+            active_ = false;
+        } else if (hammerDetached_ && ageSamples_ > 256 && beamEnergy < 1e-9f && std::fabs(yDc) < 1e-6f) {
             active_ = false;
         }
 
@@ -603,6 +619,8 @@ private:
     bool active_ = false;
     bool releasing_ = false;
     bool sustained_ = false;
+    float damperAmount_ = 0.0f;
+    float releaseEnv_ = 1.0f;
     int midiNote_ = -1;
     int modelType_ = 0;
     float velocity_ = 0.0f;
