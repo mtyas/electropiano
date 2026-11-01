@@ -1,0 +1,40 @@
+# Build outputs
+build/
+bin/
+obj/
+*.dSYM/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.clap
+*.vst3
+*.component
+*.app
+*.exe
+*.a
+*.lib
+
+# Temporary test wavs & audio renders
+renders/
+*.wav
+
+# User presets (local testing)
+presets/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE & Editor caches
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.old

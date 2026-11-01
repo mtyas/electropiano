@@ -1,0 +1,145 @@
+name: Multiplatform Builds & Releases
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # ============================================================================
+  # 1. macOS Build (VST3, CLAP, AU, Standalone App)
+  # ============================================================================
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build with Make
+        run: |
+          make all
+          make test
+
+      - name: Package macOS Artifacts
+        run: |
+          mkdir -p release-macos
+          cp -R "build/PyPHS Electric Piano.vst3" release-macos/
+          cp -R "build/PyPHS Electric Piano.clap" release-macos/
+          cp -R "build/PyPHS Electric Piano.component" release-macos/
+          cp -R "build/PyPHS Electric Piano.app" release-macos/
+          cd release-macos && zip -r ../PyPHS-Electric-Piano-macOS-Universal.zip *
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-macOS
+          path: PyPHS-Electric-Piano-macOS-Universal.zip
+
+  # ============================================================================
+  # 2. Windows Build (VST3, CLAP, Standalone)
+  # ============================================================================
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: |
+          cmake --build build --config Release --target PyPHS_CLAP PyPHS_VST3 test_phs_piano
+
+      - name: Run Tests
+        run: |
+          ./build/Release/test_phs_piano.exe
+
+      - name: Package Windows Artifacts
+        shell: bash
+        run: |
+          mkdir -p release-windows
+          cp build/Release/*.clap release-windows/ 2>/dev/null || true
+          cp build/Release/*.vst3 release-windows/ 2>/dev/null || true
+          cd release-windows && 7z a ../PyPHS-Electric-Piano-Windows-x64.zip *
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-Windows
+          path: PyPHS-Electric-Piano-Windows-x64.zip
+
+  # ============================================================================
+  # 3. Linux Build (VST3, CLAP)
+  # ============================================================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libgl1-mesa-dev
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --target PyPHS_CLAP PyPHS_VST3 test_phs_piano -j$(nproc)
+
+      - name: Run Tests
+        run: |
+          ./build/test_phs_piano
+
+      - name: Package Linux Artifacts
+        run: |
+          mkdir -p release-linux
+          cp build/*.clap release-linux/ 2>/dev/null || true
+          cp build/*.vst3 release-linux/ 2>/dev/null || true
+          tar -czvf PyPHS-Electric-Piano-Linux-x64.tar.gz -C release-linux .
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-Linux
+          path: PyPHS-Electric-Piano-Linux-x64.tar.gz
+
+  # ============================================================================
+  # 4. GitHub Release on Tag
+  # ============================================================================
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-macOS
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-Windows
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: PyPHS-Electric-Piano-Linux
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            PyPHS-Electric-Piano-macOS-Universal.zip
+            PyPHS-Electric-Piano-Windows-x64.zip
+            PyPHS-Electric-Piano-Linux-x64.tar.gz
+          generate_release_notes: true
