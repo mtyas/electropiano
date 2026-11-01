@@ -249,6 +249,19 @@ public:
         }
     }
 
+    void setSustain(bool active) {
+        sustainPedal_ = active;
+        for (auto& v : voices_) {
+            if (v.isActive()) {
+                v.setSustainPedal(sustainPedal_);
+            }
+        }
+    }
+
+    bool isSustainActive() const {
+        return sustainPedal_;
+    }
+
     void handleMidiEvent(uint8_t status, uint8_t data1, uint8_t data2) {
         const uint8_t msg = status & 0xF0;
         if (msg == 0x90 && data2 > 0) {
