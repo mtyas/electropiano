@@ -43,6 +43,31 @@ public:
         const double w0 = kTau * fc / fs, alpha = std::sin(w0) / (2.0 * q), c = std::cos(w0);
         setNormalised((1.0 + c) * 0.5, -(1.0 + c), (1.0 + c) * 0.5, 1.0 + alpha, -2.0 * c, 1.0 - alpha);
     }
+    void setPeaking(double fc, double q, double gainDb, double fs) {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double w0 = kTau * fc / fs, alpha = std::sin(w0) / (2.0 * q), c = std::cos(w0);
+        setNormalised(1.0 + alpha * A, -2.0 * c, 1.0 - alpha * A, 1.0 + alpha / A, -2.0 * c, 1.0 - alpha / A);
+    }
+    void setLowShelf(double fc, double q, double gainDb, double fs) {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double w0 = kTau * fc / fs, alpha = std::sin(w0) / (2.0 * q), c = std::cos(w0), sa = 2.0 * std::sqrt(A) * alpha;
+        setNormalised(A * ((A + 1.0) - (A - 1.0) * c + sa), 2.0 * A * ((A - 1.0) - (A + 1.0) * c), A * ((A + 1.0) - (A - 1.0) * c - sa),
+                      (A + 1.0) + (A - 1.0) * c + sa, -2.0 * ((A - 1.0) + (A + 1.0) * c), (A + 1.0) + (A - 1.0) * c - sa);
+    }
+    void setHighShelf(double fc, double q, double gainDb, double fs) {
+        const double A = std::pow(10.0, gainDb / 40.0);
+        const double w0 = kTau * fc / fs, alpha = std::sin(w0) / (2.0 * q), c = std::cos(w0), sa = 2.0 * std::sqrt(A) * alpha;
+        setNormalised(A * ((A + 1.0) + (A - 1.0) * c + sa), -2.0 * A * ((A - 1.0) + (A + 1.0) * c), A * ((A + 1.0) + (A - 1.0) * c - sa),
+                      (A + 1.0) - (A - 1.0) * c + sa, 2.0 * ((A - 1.0) - (A + 1.0) * c), (A + 1.0) - (A - 1.0) * c - sa);
+    }
+    // |H(e^jw)| at frequency f: used by the editor to draw the EQ and cabinet curves
+    double magnitude(double f, double fs) const {
+        const double w = kTau * f / fs;
+        const double c1 = std::cos(w), s1 = std::sin(w), c2 = std::cos(2.0 * w), s2 = std::sin(2.0 * w);
+        const double nr = b0_ + b1_ * c1 + b2_ * c2, ni = -(b1_ * s1 + b2_ * s2);
+        const double dr = 1.0 + a1_ * c1 + a2_ * c2, di = -(a1_ * s1 + a2_ * s2);
+        return std::sqrt((nr * nr + ni * ni) / (dr * dr + di * di + 1e-300));
+    }
     double process(double x) {
         const double y = b0_ * x + z1_;
         z1_ = b1_ * x - a1_ * y + z2_;
@@ -395,6 +420,9 @@ class ModalReed {
 public:
     void init(double f0, const ModeArray& ratios, const ModeArray& amps, const ModeArray& decayDb,
               double onsetTime, double velocity, double fs) {
+        baseF0_ = f0;
+        fs_ = fs;
+        ratios_ = ratios;
         for (int i = 0; i < kNumModes; ++i) {
             Mode& m = modes_[i];
             const double inc = kTau * f0 * ratios[i] / fs;
@@ -417,6 +445,18 @@ public:
         damperReleaseCount_ = 0.0;
         damperRampDone_ = false;
         dragK_ = 0.0;
+        pitchScale_ = 1.0;
+    }
+
+    // Retunes every mode by a frequency ratio; the phasors keep their state, so a bend is seamless
+    void setPitchScale(double scale) {
+        if (std::fabs(scale - pitchScale_) < 1e-7) return;
+        pitchScale_ = scale;
+        for (int i = 0; i < kNumModes; ++i) {
+            const double inc = kTau * baseF0_ * ratios_[i] * scale / fs_;
+            modes_[i].cosInc = std::cos(inc);
+            modes_[i].sinInc = std::sin(inc);
+        }
     }
 
     void setAirDrag(double betaDbPerMm, double swingMm, double fs) {
@@ -513,6 +553,8 @@ private:
     double damperReleaseCount_ = 0.0;
     bool damperRampDone_ = false;
     double dragK_ = 0.0;
+    double baseF0_ = 261.6, fs_ = 48000.0, pitchScale_ = 1.0;
+    ModeArray ratios_{};
 };
 
 // =============================================================================
@@ -608,6 +650,7 @@ public:
     }
 
     void noteOff() { reed_.startDamper(tableMidi_, fs_, damperScale_); }
+    void setPitchScale(double scale) { reed_.setPitchScale(scale); }
 
     // Reed displacement plus the attack-noise burst (which upstream also feeds the pickup)
     double next() { return reed_.next() + (noise_.done() ? 0.0 : noise_.next()); }

@@ -97,6 +97,7 @@ static const TUID kIPluginFactory3IID = INLINE_UID(0x4555A2AB, 0xC1234E57, 0x9B1
 static const TUID kIComponentIID      = INLINE_UID(0xE831FF31, 0xF2D54301, 0x928EBBEE, 0x25697802);
 static const TUID kIAudioProcessorIID = INLINE_UID(0x42043F99, 0xB7DA453C, 0xA569E79D, 0x9AAEC33D);
 static const TUID kIEditControllerIID = INLINE_UID(0xDCD7BBE3, 0x7742448D, 0xA874AACC, 0x979C759E);
+static const TUID kINoteExpressionControllerIID = INLINE_UID(0xB7F8F859, 0x41234872, 0x91169581, 0x4EB84B63);
 static const TUID kIPlugViewIID       = INLINE_UID(0x5BC32507, 0xD06049EA, 0xA6151B52, 0x2B755B29);
 
 class IBStream : public FUnknown {
@@ -299,6 +300,19 @@ struct NoteOffEvent {
     float tuning;
 };
 
+struct NoteExpressionValueEvent {
+    uint32 typeId;
+    int32 noteId;
+    double value;
+};
+
+struct PolyPressureEvent {
+    int16 channel;
+    int16 pitch;
+    float pressure;
+    int32 noteId;
+};
+
 struct Event {
     int32 busIndex;
     int32 sampleOffset;
@@ -315,6 +329,8 @@ struct Event {
     union {
         NoteOnEvent noteOn;
         NoteOffEvent noteOff;
+        PolyPressureEvent polyPressure;
+        NoteExpressionValueEvent noteExpressionValue;
         uint8 rawPad[32];
     };
 };
@@ -395,6 +411,37 @@ public:
     virtual tresult SMTG_API setParamNormalized(ParamID id, ParamValue value) = 0;
     virtual tresult SMTG_API setComponentHandler(IComponentHandler* handler) = 0;
     virtual IPlugView* SMTG_API createView(const char* name) = 0;
+};
+
+// Per-note expression (MPE-style): the host asks which expressions the instrument understands
+enum NoteExpressionTypeIDs : uint32 {
+    kVolumeTypeID = 0, kPanTypeID, kTuningTypeID, kVibratoTypeID, kExpressionTypeID, kBrightnessTypeID
+};
+
+struct NoteExpressionValueDescription {
+    double defaultValue;
+    double minimum;
+    double maximum;
+    int32 stepCount;
+};
+
+struct NoteExpressionTypeInfo {
+    uint32 typeId;
+    String128 title;
+    String128 shortTitle;
+    String128 units;
+    int32 unitId;
+    NoteExpressionValueDescription valueDesc;
+    ParamID associatedParameterId;
+    int32 flags; // kIsBipolar = 1
+};
+
+class INoteExpressionController : public FUnknown {
+public:
+    virtual int32 SMTG_API getNoteExpressionCount(int32 busIndex, int16 channel) = 0;
+    virtual tresult SMTG_API getNoteExpressionInfo(int32 busIndex, int16 channel, int32 noteExpressionIndex, NoteExpressionTypeInfo& info) = 0;
+    virtual tresult SMTG_API getNoteExpressionStringByValue(int32 busIndex, int16 channel, uint32 id, ParamValue valueNormalized, String128 string) = 0;
+    virtual tresult SMTG_API getNoteExpressionValueByString(int32 busIndex, int16 channel, uint32 id, const char16* string, ParamValue& valueNormalized) = 0;
 };
 
 } // namespace Vst

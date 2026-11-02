@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(electropiano VERSION 0.77 LANGUAGES C CXX)
+project(electropiano VERSION 0.79 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

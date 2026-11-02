@@ -2,12 +2,25 @@
 
 #include "PhsParameters.hpp"
 #include "wurli/WurliAmp.hpp"
+#include "PhsCabinet.hpp"
 #include <cmath>
 #include <algorithm>
 #include <array>
 #include <vector>
 
 namespace phs {
+
+// Configures one band of the mastering EQ from the parameter array. Bands 0 and 3 can be shelves.
+// Shared by the DSP and the editor's response curve.
+inline void setupEqBand(wurli::Biquad& b, int band, const float* p, double fs) {
+    const double f = std::min<double>(eqBandFreqHz(band, p[kEqFreqId[band]]), 0.45 * fs);
+    const double gain = eqGainDb(p[kEqGainId[band]]);
+    const double q = eqQ(p[kEqQId[band]]);
+    const bool shelf = kEqShelfId[band] < kNumParams && stepIndex(p[kEqShelfId[band]], 1) == 1;
+    if (shelf && band == 0) b.setLowShelf(f, q, gain, fs);
+    else if (shelf) b.setHighShelf(f, q, gain, fs);
+    else b.setPeaking(f, q, gain, fs);
+}
 
 // Level match: the 200A chain's plugin-level output against the suitcase chain
 static constexpr float kAmp200AOutputTrim = 1.5f;
@@ -26,6 +39,14 @@ public:
 
         amp200A_.prepare(fs_);
         cabinet_.prepare(fs_);
+        cabModel_.prepare(fs_);
+        meterDecay_ = std::exp(-1.0f / (0.30f * fs_));
+        // Spring tank: two springs of different length, 32-stage dispersive allpass each
+        const int springBase[2] = {static_cast<int>(0.0331f * fs_), static_cast<int>(0.0413f * fs_)};
+        for (int k = 0; k < 2; ++k) {
+            springLen_[k] = std::max(64, springBase[k]);
+            springBuf_[k].assign(springLen_[k], 0.0f);
+        }
 
         // Echo: up to 1 s plus modulation headroom
         echoLen_ = static_cast<int>(1.1f * fs_) + 8;
@@ -92,6 +113,22 @@ public:
         }
 
         amp200A_.reset();
+        for (int k = 0; k < 2; ++k) {
+            std::fill(springBuf_[k].begin(), springBuf_[k].end(), 0.0f);
+            springIdx_[k] = 0;
+            springLp_[k] = springHp_[k] = 0.0f;
+            for (auto& st : springAp_[k]) st = {0.0f, 0.0f};
+        }
+        meterL_ = meterR_ = satIn_ = satOut_ = 0.0f;
+        compGrDb_ = 0.0f;
+        cabModel_.reset();
+        eqKey_ = -1.0f;
+        for (auto& ch : eqBq_) for (auto& b : ch) b.reset();
+        scLpL_ = scLpR_ = rmsState_ = compGr_ = 0.0f;
+        limGain_ = 1.0f;
+        os1_.reset();
+        os2_.reset();
+        osStep_ = -1;
         cabinet_.reset();
         std::fill(echoBufL_.begin(), echoBufL_.end(), 0.0f);
         std::fill(echoBufR_.begin(), echoBufR_.end(), 0.0f);
@@ -115,6 +152,24 @@ public:
             std::fill(apBufR_[i].begin(), apBufR_[i].end(), 0.0f);
         }
     }
+
+    // Output meters (peak with a ~300 ms fall), compressor gain reduction in dB (<= 0) and the
+    // amp stage's recent input / output peaks, for the editor
+    float meterL() const { return meterL_; }
+    float meterR() const { return meterR_; }
+    float gainReductionDb() const { return compGrDb_; }
+    float compLevelDb() const { return compLevelDb_; }
+    float limiterReductionDb() const { return limGrDb_; }
+    float ampInLevel() const { return satIn_; }
+    float ampOutLevel() const { return satOut_; }
+    // The suitcase preamp's static transfer curve (what the editor plots)
+    static float suitcaseTransfer(float x, float driveParam) {
+        const float g = 1.0f + 6.5f * driveParam * driveParam;
+        return suitcaseShape(x, driveParam, g) / std::sqrt(1.0f + 0.45f * (g - 1.0f));
+    }
+
+    // Host tempo for the synced tremolo / phaser / echo (the engine updates it every block)
+    void setTempo(float bpm) { bpm_ = std::clamp(bpm, 20.0f, 400.0f); }
 
     void processStereoSample(float monoIn, const float* params, float modWheel, float& outL, float& outR) {
         const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
@@ -156,22 +211,24 @@ public:
             // feedback loop, volume pot, power amp (OpenWurli). Drive = the volume pot.
             amp200A_.setVolume(wurliVolumePot(params[kParamPreampDrive]));
             amp200A_.setTremoloDepth(std::clamp(params[kParamTremoloDepth] + 0.75f * modWheel, 0.0f, 1.0f));
-            amp200A_.setTremoloRateScale(tremoloRateHz(params[kParamTremoloRate]) / wurli::Tremolo::kNaturalRateHz);
+            amp200A_.setTremoloRateScale(syncedHz(tremoloRateHz(params[kParamTremoloRate]), params[kParamTremSync], bpm_) / wurli::Tremolo::kNaturalRateHz);
             ampOut = static_cast<float>(amp200A_.process(x / (kVoiceUnitsPerVolt * kVoiceMixGain))) * kAmp200AOutputTrim;
         } else {
-            // Suitcase / stage preamp: smooth tube-JFET saturation with 2nd-harmonic bloom
-            const float driveParam = params[kParamPreampDrive];
-            const float driveGain = 1.0f + 6.5f * driveParam * driveParam;
-            const float xDriven = x * driveGain;
-            const float x2 = xDriven * xDriven;
-            const float asym = 0.12f * driveParam * (x2 / (1.0f + 0.6f * x2));
-            ampOut = (xDriven + asym) / std::sqrt(1.0f + 0.75f * x2);
-            ampOut *= 1.0f / std::sqrt(1.0f + 0.45f * (driveGain - 1.0f));
+            // Suitcase / stage preamp: smooth tube-JFET saturation with 2nd-harmonic bloom,
+            // run 2x / 4x oversampled (Quality) so the saturation does not fold back as aliasing
+            ampOut = processSuitcasePreamp(x, params[kParamPreampDrive], stepIndex(params[kParamQuality], 2));
         }
 
         // Speaker cabinet (OpenWurli speaker model; 0 = flat DI)
-        cabinet_.setCharacter(params[kParamCabinet]);
-        ampOut = static_cast<float>(cabinet_.process(ampOut));
+        const int cabType = stepIndex(params[kParamCabType], 9);
+        if (cabType == 0) {
+            cabinet_.setCharacter(params[kParamCabinet]);
+            ampOut = static_cast<float>(cabinet_.process(ampOut));
+        } else {
+            // A miked cabinet is always in the signal; the Cabinet knob becomes its drive
+            cabModel_.configure(cabType, params[kParamCabMic], params[kParamCabDistance], params[kParamCabRoom], params[kParamCabinet]);
+            ampOut = cabModel_.process(ampOut);
+        }
 
         // =========================================================================
         // 3. Passive Baxandall Bass & Treble Tone Stack (+/- 16 dB at 140 Hz / 2.8 kHz)
@@ -189,6 +246,7 @@ public:
         const float highBand = ampOut - highStateL_;
 
         float sigL = ampOut + bassGain_ * lowStateL_ + trebleGain_ * highBand;
+
         float sigR = sigL;
 
         // Control-rate LFOs: the transcendental maths behind every modulator is evaluated
@@ -260,7 +318,7 @@ public:
         // =========================================================================
         const float echoMix = params[kParamDelayMix];
         if (echoMix > 0.001f) {
-            const float target = delayTimeSec(params[kParamDelayTime]) * fs_;
+            const float target = syncedSeconds(delayTimeSec(params[kParamDelayTime]), params[kParamEchoSync], bpm_) * fs_;
             if (echoTime_ < 0.0f) echoTime_ = target;
             echoTime_ += echoTimeSlew_ * (target - echoTime_); // glides like a tape speed change
             echoWowPhase_ += 0.55f * dt_;
@@ -290,7 +348,30 @@ public:
         // 7. Stereo Spring / Hall Reverb
         // =========================================================================
         const float revMix = params[kParamReverbMix];
-        if (revMix > 0.001f) {
+        if (revMix > 0.001f && stepIndex(params[kParamReverbType], 1) == 1) {
+            // Spring tank: dispersive allpass chains in feedback delay loops give the "boing" chirp
+            const float g = 0.55f + 0.38f * params[kParamReverbDecay];
+            const float in = (sigL + sigR) * 0.5f * 0.5f;
+            float wet[2];
+            for (int k = 0; k < 2; ++k) {
+                float y = springBuf_[k][springIdx_[k]];
+                for (auto& st : springAp_[k]) {
+                    const float o = kSpringAllpass * y + st.x1 - kSpringAllpass * st.y1;
+                    st.x1 = y;
+                    st.y1 = o;
+                    y = o;
+                }
+                springLp_[k] += 0.42f * (y - springLp_[k]);
+                float w = in + g * springLp_[k];
+                springHp_[k] += 0.003f * (w - springHp_[k]);
+                w -= springHp_[k];
+                springBuf_[k][springIdx_[k]] = std::tanh(w);
+                if (++springIdx_[k] >= springLen_[k]) springIdx_[k] = 0;
+                wet[k] = springLp_[k];
+            }
+            sigL = sigL * (1.0f - 0.30f * revMix) + wet[0] * (0.90f * revMix) + wet[1] * (0.25f * revMix);
+            sigR = sigR * (1.0f - 0.30f * revMix) + wet[1] * (0.90f * revMix) + wet[0] * (0.25f * revMix);
+        } else if (revMix > 0.001f) {
             const float revDecay = 0.35f + 0.58f * params[kParamReverbDecay];
             const float damp = 0.58f; // Warm high-frequency acoustic damping
             const float revInRaw = (sigL + sigR) * 0.15f;
@@ -338,13 +419,132 @@ public:
             sigR = sigR * (1.0f - 0.50f * revMix) + sumR * (0.65f * revMix);
         }
 
-        // Master output gain + gentle safety soft-clipper
+        // Mastering EQ: four bands (low shelf / bell, two bells, high shelf / bell), stereo-linked
+        {
+            float key = 0.0f;
+            for (int b = 0; b < 4; ++b) key += params[kEqFreqId[b]] * (3.1f + b) + params[kEqGainId[b]] * (7.3f + b) + params[kEqQId[b]] * (1.7f + b);
+            key += params[kParamEqB1Shelf] * 11.0f + params[kParamEqB4Shelf] * 13.0f;
+            const bool changed = key != eqKey_;
+            eqKey_ = key;
+            for (int b = 0; b < 4; ++b) {
+                const bool active = std::fabs(eqGainDb(params[kEqGainId[b]])) > 0.05f;
+                if (changed) {
+                    setupEqBand(eqBq_[0][b], b, params, fs_);
+                    eqBq_[1][b] = eqBq_[0][b]; // same coefficients, own state (copying is cheap)
+                }
+                if (active) {
+                    sigL = static_cast<float>(eqBq_[0][b].process(sigL));
+                    sigR = static_cast<float>(eqBq_[1][b].process(sigR));
+                }
+            }
+        }
+
+        // Bus compressor: stereo-linked, peak or RMS detector with a sidechain high-pass, soft knee,
+        // attack / release, manual and automatic make-up, and a parallel mix
+        const float compMix = params[kParamCompAmount];
+        if (compMix > 0.001f) {
+            const float thr = compThreshDb(params[kParamCompThresh]);
+            const float ratio = compRatio(params[kParamCompRatio]);
+            const float knee = compKneeDb(params[kParamCompKnee]);
+            const float attack = 1.0f - std::exp(-1.0f / (0.001f * compAttackMs(params[kParamCompAttack]) * fs_));
+            const float release = 1.0f - std::exp(-1.0f / (0.001f * compReleaseMs(params[kParamCompRelease]) * fs_));
+            // Sidechain: high-pass the detector so bass does not pump the whole mix
+            float dL = sigL, dR = sigR;
+            if (params[kParamCompHpf] > 0.01f) {
+                const float a = std::exp(-6.2831853f * compHpfHz(params[kParamCompHpf]) / fs_);
+                scLpL_ = (1.0f - a) * dL + a * scLpL_;
+                scLpR_ = (1.0f - a) * dR + a * scLpR_;
+                dL -= scLpL_;
+                dR -= scLpR_;
+            }
+            float level;
+            if (stepIndex(params[kParamCompDetect], 1) == 1) {
+                const float e = 0.5f * (dL * dL + dR * dR);
+                rmsState_ += (1.0f - std::exp(-1.0f / (0.010f * fs_))) * (e - rmsState_);
+                level = std::sqrt(rmsState_);
+            } else {
+                level = std::max(std::fabs(dL), std::fabs(dR));
+            }
+            compLevelDb_ = 20.0f * std::log10(level + 1e-9f);
+            const float over = compLevelDb_ - thr;
+            const float grTarget = compStaticGrDb(over, ratio, knee);
+            compGr_ += (grTarget < compGr_ ? attack : release) * (grTarget - compGr_);
+            const float autoGain = stepIndex(params[kParamCompAuto], 1) ? -thr * (1.0f - 1.0f / ratio) * 0.5f : 0.0f;
+            const float gain = std::pow(10.0f, (compGr_ + autoGain + compMakeupDb(params[kParamCompMakeup])) / 20.0f);
+            sigL += compMix * (sigL * gain - sigL);
+            sigR += compMix * (sigR * gain - sigR);
+            compGrDb_ = compGr_;
+        } else {
+            compGr_ += 0.002f * (0.0f - compGr_);
+            compGrDb_ = compGr_;
+            compLevelDb_ = -90.0f;
+            rmsState_ = 0.0f;
+        }
+
+        // Master output gain, then the limiter (instant attack, smooth release) and a gentle safety clipper
         const float masterGain = params[kParamMasterVolume] * 1.25f;
-        outL = softLimit(sigL * masterGain);
-        outR = softLimit(sigR * masterGain);
+        sigL *= masterGain;
+        sigR *= masterGain;
+        if (stepIndex(params[kParamLimOn], 1) == 1) {
+            const float ceilLin = std::pow(10.0f, limCeilDb(params[kParamLimCeil]) / 20.0f);
+            const float peak = std::max(std::fabs(sigL), std::fabs(sigR));
+            const float want = peak > ceilLin ? ceilLin / peak : 1.0f;
+            limGain_ = want < limGain_ ? want : limGain_ + (1.0f - std::exp(-1.0f / (0.08f * fs_))) * (1.0f - limGain_);
+            sigL *= limGain_;
+            sigR *= limGain_;
+        } else {
+            limGain_ += 0.01f * (1.0f - limGain_);
+        }
+        limGrDb_ = 20.0f * std::log10(limGain_ + 1e-9f);
+        outL = softLimit(sigL);
+        outR = softLimit(sigR);
+        meterL_ = std::max(std::fabs(outL), meterL_ * meterDecay_);
+        meterR_ = std::max(std::fabs(outR), meterR_ * meterDecay_);
     }
 
 private:
+    static float suitcaseShape(float x, float driveParam, float driveGain) {
+        const float xDriven = x * driveGain;
+        const float x2 = xDriven * xDriven;
+        const float asym = 0.12f * driveParam * (x2 / (1.0f + 0.6f * x2));
+        return (xDriven + asym) / std::sqrt(1.0f + 0.75f * x2);
+    }
+
+    float processSuitcasePreamp(float x, float driveParam, int qualityStep) {
+        const float driveGain = 1.0f + 6.5f * driveParam * driveParam;
+        const float norm = 1.0f / std::sqrt(1.0f + 0.45f * (driveGain - 1.0f));
+        satIn_ = std::max(std::fabs(x), satIn_ * meterDecay_);
+        if (qualityStep != osStep_) {
+            osStep_ = qualityStep;
+            os1_.reset();
+            os2_.reset();
+        }
+        if (qualityStep == 0) {
+            const float y0 = suitcaseShape(x, driveParam, driveGain) * norm;
+            satOut_ = std::max(std::fabs(y0), satOut_ * meterDecay_);
+            return y0;
+        }
+
+        double u0, u1;
+        os1_.upsample(x, u0, u1);
+        double y;
+        if (qualityStep == 1) {
+            y = os1_.downsample(suitcaseShape(static_cast<float>(u0), driveParam, driveGain),
+                                suitcaseShape(static_cast<float>(u1), driveParam, driveGain));
+        } else {
+            double a0, a1, b0, b1;
+            os2_.upsample(u0, a0, a1);
+            const double ya = os2_.downsample(suitcaseShape(static_cast<float>(a0), driveParam, driveGain),
+                                              suitcaseShape(static_cast<float>(a1), driveParam, driveGain));
+            os2_.upsample(u1, b0, b1);
+            const double yb = os2_.downsample(suitcaseShape(static_cast<float>(b0), driveParam, driveGain),
+                                              suitcaseShape(static_cast<float>(b1), driveParam, driveGain));
+            y = os1_.downsample(ya, yb);
+        }
+        satOut_ = std::max(std::fabs(static_cast<float>(y) * norm), satOut_ * meterDecay_);
+        return static_cast<float>(y) * norm;
+    }
+
     static constexpr int kCtrlRate = 16;
     enum LfoOutput { kLfoPhaserAL, kLfoPhaserAR, kLfoTremL, kLfoTremR, kLfoChorusDL, kLfoChorusDR, kNumLfoOutputs };
 
@@ -357,9 +557,9 @@ private:
         }
 
         const float period = static_cast<float>(kCtrlRate) * dt_;
-        phaserPhase_ += (0.08f + params[kParamPhaserRate] * 3.5f) * period;
+        phaserPhase_ += syncedHz(phaserRateHz(params[kParamPhaserRate]), params[kParamPhaserSync], bpm_) * period;
         if (phaserPhase_ >= 1.0f) phaserPhase_ -= 1.0f;
-        tremPhase_ += (0.5f + params[kParamTremoloRate] * 10.5f) * period;
+        tremPhase_ += syncedHz(tremoloRateHz(params[kParamTremoloRate]), params[kParamTremSync], bpm_) * period;
         if (tremPhase_ >= 1.0f) tremPhase_ -= 1.0f;
         chorusPhase_ += 0.65f * period;
         if (chorusPhase_ >= 1.0f) chorusPhase_ -= 1.0f;
@@ -463,6 +663,27 @@ private:
     bool lfoPrimed_ = false;
     std::array<float, kNumLfoOutputs> lfoCur_{};
     std::array<float, kNumLfoOutputs> lfoInc_{};
+
+    float meterL_ = 0.0f, meterR_ = 0.0f, meterDecay_ = 0.9999f;
+    float satIn_ = 0.0f, satOut_ = 0.0f;
+    float compGrDb_ = 0.0f;
+    CabinetModel cabModel_;
+    wurli::Biquad eqBq_[2][4];
+    float eqKey_ = -1.0f;
+    float scLpL_ = 0.0f, scLpR_ = 0.0f, rmsState_ = 0.0f, compGr_ = 0.0f, compLevelDb_ = -90.0f;
+    float limGain_ = 1.0f, limGrDb_ = 0.0f;
+
+    static constexpr int kSpringStages = 32;
+    static constexpr float kSpringAllpass = 0.70f;
+    struct ApState { float x1, y1; };
+    std::vector<float> springBuf_[2];
+    int springLen_[2]{64, 64}, springIdx_[2]{};
+    std::array<ApState, kSpringStages> springAp_[2]{};
+    float springLp_[2]{}, springHp_[2]{};
+
+    float bpm_ = 120.0f;
+    wurli::Oversampler os1_, os2_;
+    int osStep_ = -1;
 
     wurli::Amp200A amp200A_;
     wurli::Speaker cabinet_;

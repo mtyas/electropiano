@@ -30,12 +30,12 @@ jobs:
           cp -R build/electropiano.clap build/electropiano.vst3 build/electropiano.component build/electropiano.app dist/
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          cd dist && ditto -c -k --sequesterRsrc . ../electropiano-v0.77-macOS-Universal.zip
+          cd dist && ditto -c -k --sequesterRsrc . ../electropiano-v0.79-macOS-Universal.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-macOS
-          path: electropiano-v0.77-macOS-Universal.zip
+          path: electropiano-v0.79-macOS-Universal.zip
 
   # ===========================================================================
   # Windows: CLAP, VST3 (x64)
@@ -73,12 +73,12 @@ jobs:
           cp build/Release/electropiano.vst3 dist/electropiano.vst3/Contents/x86_64-win/electropiano.vst3
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          cd dist && 7z a ../electropiano-v0.77-Windows-x64.zip *
+          cd dist && 7z a ../electropiano-v0.79-Windows-x64.zip *
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-Windows
-          path: electropiano-v0.77-Windows-x64.zip
+          path: electropiano-v0.79-Windows-x64.zip
 
   # ===========================================================================
   # Linux: CLAP, VST3 (x64, X11)
@@ -115,12 +115,12 @@ jobs:
           cp build/electropiano.vst3 dist/electropiano.vst3/Contents/x86_64-linux/electropiano.so
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          tar -czf electropiano-v0.77-Linux-x64.tar.gz -C dist .
+          tar -czf electropiano-v0.79-Linux-x64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-Linux
-          path: electropiano-v0.77-Linux-x64.tar.gz
+          path: electropiano-v0.79-Linux-x64.tar.gz
 
   # ===========================================================================
   # GitHub Release for version tags

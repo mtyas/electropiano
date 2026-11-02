@@ -33,7 +33,7 @@ static const clap_plugin_descriptor_t kClapDescriptor = {
     "https://mtyas.com",
     "https://mtyas.com",
     "https://ko-fi.com/mtyas",
-    "0.77",
+    "0.79",
     "electropiano by mtyas - Port-Hamiltonian Rhodes & Wurlitzer Physical Model",
     kClapFeatures
 };
@@ -104,18 +104,35 @@ struct PhsClapPlugin {
         switch (hdr->type) {
             case CLAP_EVENT_NOTE_ON: {
                 const auto *ev = reinterpret_cast<const clap_event_note_t *>(hdr);
-                engine.noteOn(ev->key, static_cast<float>(ev->velocity));
+                engine.noteOn(ev->key, static_cast<float>(ev->velocity), ev->channel < 0 ? 0 : ev->channel);
                 break;
             }
             case CLAP_EVENT_NOTE_OFF:
             case CLAP_EVENT_NOTE_CHOKE: {
                 const auto *ev = reinterpret_cast<const clap_event_note_t *>(hdr);
-                engine.noteOff(ev->key);
+                engine.noteOff(ev->key, ev->channel < 0 ? 0 : ev->channel);
+                break;
+            }
+            case CLAP_EVENT_NOTE_EXPRESSION: {
+                const auto *ev = reinterpret_cast<const clap_event_note_expression_t *>(hdr);
+                if (ev->key < 0 || ev->key > 127) break;
+                const float value = static_cast<float>(ev->value);
+                if (ev->expression_id == CLAP_NOTE_EXPRESSION_TUNING) engine.setNoteTuning(ev->key, value);
+                else if (ev->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE) engine.setNotePressure(ev->key, value);
+                else if (ev->expression_id == CLAP_NOTE_EXPRESSION_BRIGHTNESS) engine.setNoteBrightness(ev->key, value);
                 break;
             }
             case CLAP_EVENT_MIDI: {
                 const auto *ev = reinterpret_cast<const clap_event_midi_t *>(hdr);
                 engine.handleMidiEvent(ev->data[0], ev->data[1], ev->data[2]);
+                break;
+            }
+            case CLAP_EVENT_PARAM_MOD: {
+                const auto *ev = reinterpret_cast<const clap_event_param_mod_t *>(hdr);
+                // Only global modulation: per-note / per-key targets are not supported
+                if (ev->note_id == -1 && ev->key == -1 && ev->channel == -1) {
+                    engine.setHostModulation(ev->param_id, static_cast<float>(ev->amount));
+                }
                 break;
             }
             case CLAP_EVENT_PARAM_VALUE: {
@@ -191,7 +208,9 @@ static bool CLAP_ABI paramsGetInfo(const clap_plugin_t *,
     info->id = meta.id;
     // Values are exchanged normalised (0..1), so choice parameters are not flagged
     // CLAP_PARAM_IS_STEPPED (which would restrict them to the integers 0 and 1).
-    info->flags = CLAP_PARAM_IS_AUTOMATABLE;
+    // Continuous parameters accept host modulation (CLAP_EVENT_PARAM_MOD): an offset added to the
+    // knob without moving it, applied to the whole instrument
+    info->flags = CLAP_PARAM_IS_AUTOMATABLE | (meta.steps == 0 ? CLAP_PARAM_IS_MODULATABLE : 0);
     info->cookie = nullptr;
     std::snprintf(info->name, sizeof(info->name), "%s", meta.name);
     std::snprintf(info->module, sizeof(info->module), "%s", meta.category);
@@ -264,8 +283,9 @@ static bool CLAP_ABI stateLoad(const clap_plugin_t *plugin, const clap_istream_t
     auto *self = static_cast<PhsClapPlugin *>(plugin->plugin_data);
     phs::PhsSynthEngine::SerializedState st{};
     const int64_t bytesRead = stream->read(stream, &st, sizeof(st));
-    if (bytesRead < static_cast<int64_t>(sizeof(st))) return false;
-    return self->engine.setState(&st, sizeof(st));
+    // Older versions saved fewer parameters, so a shorter stream is fine: setState reads by version
+    if (bytesRead < 12) return false;
+    return self->engine.setState(&st, static_cast<size_t>(bytesRead));
 }
 
 static const clap_plugin_state_t kClapStateExt = {
@@ -467,6 +487,11 @@ static clap_process_status CLAP_ABI pluginProcess(const clap_plugin_t *plugin, c
     const uint32_t numFrames = process->frames_count;
     const clap_input_events_t *inEvents = process->in_events;
     const uint32_t numEvents = (inEvents && inEvents->size) ? inEvents->size(inEvents) : 0;
+
+    if (process->transport) {
+        const auto *tr = static_cast<const clap_event_transport_t *>(process->transport);
+        if (tr->flags & CLAP_TRANSPORT_HAS_TEMPO) self->engine.setTempo(static_cast<float>(tr->tempo));
+    }
 
     float *outL = nullptr;
     float *outR = nullptr;

@@ -115,6 +115,53 @@ typedef struct clap_event_note {
     double velocity;
 } clap_event_note_t;
 
+// Per-note expressions (the CLAP ABI's clap_event_note_expression)
+enum {
+    CLAP_NOTE_EXPRESSION_VOLUME = 0,
+    CLAP_NOTE_EXPRESSION_PAN = 1,
+    CLAP_NOTE_EXPRESSION_TUNING = 2,
+    CLAP_NOTE_EXPRESSION_VIBRATO = 3,
+    CLAP_NOTE_EXPRESSION_EXPRESSION = 4,
+    CLAP_NOTE_EXPRESSION_BRIGHTNESS = 5,
+    CLAP_NOTE_EXPRESSION_PRESSURE = 6
+};
+
+typedef struct clap_event_note_expression {
+    clap_event_header_t header;
+    int32_t expression_id;
+    int32_t note_id;
+    int16_t port_index;
+    int16_t channel;
+    int16_t key;
+    double value;
+} clap_event_note_expression_t;
+
+// Host transport (the CLAP ABI's clap_event_transport); process->transport points at one or is null
+enum {
+    CLAP_TRANSPORT_HAS_TEMPO = 1 << 0,
+    CLAP_TRANSPORT_HAS_BEATS_TIMELINE = 1 << 1,
+    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE = 1 << 2,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE = 1 << 3,
+    CLAP_TRANSPORT_IS_PLAYING = 1 << 4
+};
+
+typedef struct clap_event_transport {
+    clap_event_header_t header;
+    uint32_t flags;
+    int64_t song_pos_beats;
+    int64_t song_pos_seconds;
+    double tempo;
+    double tempo_inc;
+    int64_t loop_start_beats;
+    int64_t loop_end_beats;
+    int64_t loop_start_seconds;
+    int64_t loop_end_seconds;
+    int64_t bar_start;
+    int32_t bar_number;
+    uint16_t tsig_num;
+    uint16_t tsig_denom;
+} clap_event_transport_t;
+
 typedef struct clap_event_param_value {
     clap_event_header_t header;
     clap_id param_id;
@@ -125,6 +172,17 @@ typedef struct clap_event_param_value {
     int16_t key;
     double value;
 } clap_event_param_value_t;
+
+typedef struct clap_event_param_mod {
+    clap_event_header_t header;
+    clap_id param_id;
+    void *cookie;
+    int32_t note_id;
+    int16_t port_index;
+    int16_t channel;
+    int16_t key;
+    double amount;
+} clap_event_param_mod_t;
 
 typedef struct clap_event_param_gesture {
     clap_event_header_t header;

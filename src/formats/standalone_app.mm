@@ -39,16 +39,20 @@ static void coreMidiReadProc(const MIDIPacketList *pktlist, void *readProcRefCon
     for (UInt32 i = 0; i < pktlist->numPackets; ++i) {
         const UInt16 len = packet->length;
         UInt16 idx = 0;
-        while (idx + 2 < len) {
+        while (idx < len) {
             const uint8_t status = packet->data[idx];
-            if ((status & 0x80) != 0) {
-                const uint8_t d1 = packet->data[idx + 1] & 0x7F;
-                const uint8_t d2 = packet->data[idx + 2] & 0x7F;
-                ctx->engine.pushGuiMidiEvent(status, d1, d2);
-                idx += 3;
-            } else {
-                ++idx;
+            const uint8_t kind = status & 0xF0;
+            if ((status & 0x80) == 0 || kind == 0xF0) {
+                ++idx; // data byte without a status, or a system message
+                continue;
             }
+            // Program change and channel pressure carry one data byte, everything else two
+            const UInt16 dataBytes = (kind == 0xC0 || kind == 0xD0) ? 1 : 2;
+            if (idx + dataBytes >= len) break;
+            const uint8_t d1 = packet->data[idx + 1] & 0x7F;
+            const uint8_t d2 = dataBytes == 2 ? (packet->data[idx + 2] & 0x7F) : 0;
+            ctx->engine.pushGuiMidiEvent(status, d1, d2);
+            idx += 1 + dataBytes;
         }
         packet = MIDIPacketNext(packet);
     }

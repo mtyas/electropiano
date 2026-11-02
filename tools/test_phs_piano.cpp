@@ -479,6 +479,534 @@ void renderShowcaseDemos() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// v1.4 features: MPE expression, modulation matrix, oversampling, tempo sync, state compatibility
+// ---------------------------------------------------------------------------
+float autocorrFreq(const std::vector<float>& x, size_t start, size_t len, float fs) {
+    // Normalised autocorrelation; the pitch is the shortest lag that is a strong local peak
+    const size_t minLag = static_cast<size_t>(fs / 2500.0f), maxLag = static_cast<size_t>(fs / 60.0f);
+    std::vector<float> v(maxLag + 2, 0.0f);
+    float best = -1e30f;
+    for (size_t lag = minLag; lag <= maxLag; ++lag) {
+        double acc = 0.0, e0 = 0.0, e1 = 0.0;
+        for (size_t i = 0; i + lag < len; ++i) {
+            const double a = x[start + i], b = x[start + i + lag];
+            acc += a * b; e0 += a * a; e1 += b * b;
+        }
+        v[lag] = static_cast<float>(acc / std::sqrt(e0 * e1 + 1e-30));
+        best = std::max(best, v[lag]);
+    }
+    for (size_t lag = minLag + 1; lag < maxLag; ++lag) {
+        if (v[lag] >= 0.85f * best && v[lag] >= v[lag - 1] && v[lag] >= v[lag + 1]) return fs / static_cast<float>(lag);
+    }
+    return 0.0f;
+}
+
+std::vector<float> renderMono(phs::PhsSynthEngine& e, int frames) {
+    std::vector<float> l(frames), r(frames);
+    for (int done = 0; done < frames; done += 256) e.processBlock(l.data() + done, r.data() + done, std::min(256, frames - done));
+    return l;
+}
+
+float rmsOf(const std::vector<float>& x, size_t a, size_t n) {
+    double acc = 0.0;
+    for (size_t i = a; i < a + n && i < x.size(); ++i) acc += static_cast<double>(x[i]) * x[i];
+    return static_cast<float>(std::sqrt(acc / std::max<size_t>(1, n)));
+}
+
+void bendMidi(phs::PhsSynthEngine& e, int channel, float norm) {
+    const int v14 = 8192 + static_cast<int>(std::lround(norm * 8192.0f));
+    e.handleMidiEvent(static_cast<uint8_t>(0xE0 | channel), v14 & 0x7F, (v14 >> 7) & 0x7F);
+}
+
+bool testExpression() {
+    std::printf("[TEST 6] Per-note expression (MPE pitch bend, pressure, channel handling)...\n");
+    bool ok = true;
+    for (int reed = 0; reed < 2; ++reed) {
+        phs::PhsSynthEngine e;
+        e.prepare(48000.0f);
+        e.setParamNormalized(phs::kParamResonator, reed ? 1.0f : 0.0f);
+        e.setParamNormalized(phs::kParamMpeMode, 1.0f);
+        e.setParamNormalized(phs::kParamBendRange, 1.0f); // 48 st
+        e.setParamNormalized(phs::kParamReverbMix, 0.0f);
+        e.setParamNormalized(phs::kParamTremoloDepth, 0.0f);
+
+        renderMono(e, 1024);
+        bendMidi(e, 1, 0.25f); // +12 st on channel 2 (index 1)
+        e.handleMidiEvent(0x91, 60, 100);
+        auto bent = renderMono(e, 24000);
+        const float fBent = autocorrFreq(bent, 6000, 4096, 48000.0f);
+        e.handleMidiEvent(0x81, 60, 0);
+        renderMono(e, 24000);
+
+        // A different member channel is unaffected by channel 2's bend
+        e.handleMidiEvent(0x92, 60, 100);
+        auto plain = renderMono(e, 24000);
+        const float fPlain = autocorrFreq(plain, 6000, 4096, 48000.0f);
+
+        // Bending mid-note retunes the sounding voice
+        e.handleMidiEvent(0x82, 60, 0);
+        renderMono(e, 24000);
+        bendMidi(e, 3, 0.0f);
+        e.handleMidiEvent(0x93, 60, 100);
+        renderMono(e, 12000);
+        bendMidi(e, 3, 0.25f);
+        renderMono(e, 4800);
+        auto glided = renderMono(e, 12000);
+        const float fGlide = autocorrFreq(glided, 2000, 4096, 48000.0f);
+
+        std::printf("  -> %s: bent %.1f Hz | other channel %.1f Hz | mid-note bend %.1f Hz (note 60 = 261.6 Hz)\n",
+                    reed ? "reed" : "tine", fBent, fPlain, fGlide);
+        if (std::fabs(fBent / 523.25f - 1.0f) > 0.03f) { std::fprintf(stderr, "  !! bent pitch off\n"); ok = false; }
+        if (std::fabs(fPlain / 261.63f - 1.0f) > 0.03f) { std::fprintf(stderr, "  !! bend leaked to another channel\n"); ok = false; }
+        if (std::fabs(fGlide / 523.25f - 1.0f) > 0.03f) { std::fprintf(stderr, "  !! mid-note bend did not retune\n"); ok = false; }
+    }
+
+    // Pressure pulls the magnetic pickup closer, which changes the output level
+    {
+        phs::PhsSynthEngine e;
+        e.prepare(48000.0f);
+        e.setParamNormalized(phs::kParamMpeMode, 1.0f);
+        e.setParamNormalized(phs::kParamPressureAmt, 1.0f);
+        e.setParamNormalized(phs::kParamReverbMix, 0.0f);
+        float level[2];
+        for (int p = 0; p < 2; ++p) {
+            e.handleMidiEvent(0xD1, p ? 127 : 0, 0);
+            e.handleMidiEvent(0x91, 64, 100);
+            level[p] = rmsOf(renderMono(e, 12000), 2000, 8000);
+            e.handleMidiEvent(0x81, 64, 0);
+            renderMono(e, 24000);
+        }
+        std::printf("  -> pressure 0: rms %.4f | pressure max: rms %.4f\n", level[0], level[1]);
+        if (std::fabs(level[1] - level[0]) < 0.05f * level[0]) { std::fprintf(stderr, "  !! pressure had no effect\n"); ok = false; }
+    }
+
+    // With MPE off the channel is ignored: a note-on on channel 6 is released by a note-off on channel 1
+    {
+        phs::PhsSynthEngine e;
+        e.prepare(48000.0f);
+        e.handleMidiEvent(0x95, 60, 100);
+        renderMono(e, 1024);
+        e.handleMidiEvent(0x80, 60, 0);
+        renderMono(e, 48000);
+        if (e.isNoteActive(60)) { std::fprintf(stderr, "  !! note stuck with MPE off\n"); ok = false; }
+    }
+    return ok;
+}
+
+bool testModulationMatrix() {
+    std::printf("[TEST 7] Modulation matrix (LFO -> Volume, Mod Wheel -> Env Filter)...\n");
+    bool ok = true;
+    auto destNorm = [](uint32_t param) {
+        for (int i = 1; i < phs::kNumModDests; ++i) if (phs::kModDestParam[i] == param) return i / float(phs::kNumModDests - 1);
+        return 0.0f;
+    };
+    float modulatedSpread = 0.0f, plainSpread = 0.0f;
+    for (int pass = 0; pass < 2; ++pass) {
+        phs::PhsSynthEngine e;
+        e.prepare(48000.0f);
+        e.setParamNormalized(phs::kParamReverbMix, 0.0f);
+        e.setParamNormalized(phs::kParamTremoloDepth, 0.0f);
+        e.setParamNormalized(phs::kParamTineDecay, 1.0f);
+        if (pass == 1) {
+            e.setParamNormalized(phs::kParamLfo1Rate, std::log(5.0f / 0.05f) / std::log(800.0f)); // 5 Hz
+            e.setParamNormalized(phs::kParamMod1Src, phs::kSrcLfo1 / float(phs::kNumModSources - 1));
+            e.setParamNormalized(phs::kParamMod1Dst, destNorm(phs::kParamMasterVolume));
+            e.setParamNormalized(phs::kParamMod1Amt, 0.75f); // +50 %
+        }
+        e.handleMidiEvent(0x90, 57, 110);
+        auto out = renderMono(e, 48000);
+        float lo = 1e9f, hi = 0.0f;
+        for (size_t a = 6000; a + 960 < out.size(); a += 960) {
+            const float r = rmsOf(out, a, 960);
+            lo = std::min(lo, r); hi = std::max(hi, r);
+        }
+        (pass ? modulatedSpread : plainSpread) = hi / std::max(lo, 1e-9f);
+    }
+    std::printf("  -> level max/min over 1 s: unmodulated %.2fx | LFO on Volume %.2fx\n", plainSpread, modulatedSpread);
+    if (modulatedSpread < 1.25f * plainSpread) { std::fprintf(stderr, "  !! LFO modulation not audible\n"); ok = false; }
+
+    // Mod wheel as a source, destination checked through the 'effective' output: Volume -50 % halves the level
+    {
+        float lvl[2];
+        for (int pass = 0; pass < 2; ++pass) {
+            phs::PhsSynthEngine e;
+            e.prepare(48000.0f);
+            e.setParamNormalized(phs::kParamReverbMix, 0.0f);
+            e.setParamNormalized(phs::kParamTremoloDepth, 0.0f);
+            e.setParamNormalized(phs::kParamMod1Src, phs::kSrcModWheel / float(phs::kNumModSources - 1));
+            e.setParamNormalized(phs::kParamMod1Dst, destNorm(phs::kParamMasterVolume));
+            e.setParamNormalized(phs::kParamMod1Amt, 0.0f); // -100 %
+            e.handleMidiEvent(0xB0, 1, pass ? 127 : 0);
+            e.handleMidiEvent(0x90, 60, 100);
+            lvl[pass] = rmsOf(renderMono(e, 14000), 4000, 8000);
+        }
+        std::printf("  -> mod wheel 0: rms %.4f | mod wheel max (-100%% volume): rms %.5f\n", lvl[0], lvl[1]);
+        if (!(lvl[1] < 0.05f * lvl[0])) { std::fprintf(stderr, "  !! mod wheel routing failed\n"); ok = false; }
+    }
+    return ok;
+}
+
+bool testOversamplingAndSync() {
+    std::printf("[TEST 8] Oversampled preamp and tempo-synced echo...\n");
+    bool ok = true;
+    const float fs = 48000.0f;
+
+    // Aliasing: a 9 kHz sine driven hard produces a 3rd harmonic at 27 kHz which folds to 21 kHz
+    float alias[3];
+    for (int q = 0; q < 3; ++q) {
+        phs::PhsEffectsChain fx;
+        fx.prepare(fs);
+        float p[phs::kNumParams];
+        for (uint32_t i = 0; i < phs::kNumParams; ++i) p[i] = phs::kParamMetadata[i].defaultValue;
+        p[phs::kParamPreampDrive] = 1.0f;
+        p[phs::kParamReverbMix] = 0.0f;
+        p[phs::kParamTremoloDepth] = 0.0f;
+        p[phs::kParamBassBoost] = p[phs::kParamTrebleBoost] = 0.5f;
+        p[phs::kParamQuality] = q / 2.0f;
+        const int n = 16384;
+        double re = 0.0, im = 0.0;
+        for (int i = 0; i < n; ++i) {
+            float l, r;
+            fx.processStereoSample(0.35f * std::sin(2.0f * 3.14159265f * 9000.0f * i / fs), p, 0.0f, l, r);
+            if (i >= 4096) { // Goertzel-style single bin at 21 kHz
+                const double ph = 2.0 * 3.14159265358979 * 21000.0 * i / fs;
+                re += l * std::cos(ph); im += l * std::sin(ph);
+            }
+        }
+        alias[q] = static_cast<float>(10.0 * std::log10((re * re + im * im) / ((n - 4096.0) * (n - 4096.0)) + 1e-30));
+    }
+    std::printf("  -> alias bin level: off %.1f dB | 2x %.1f dB | 4x %.1f dB\n", alias[0], alias[1], alias[2]);
+    if (!(alias[1] < alias[0] - 12.0f)) { std::fprintf(stderr, "  !! 2x oversampling does not reduce aliasing\n"); ok = false; }
+    if (!(alias[2] <= alias[1] + 3.0f)) { std::fprintf(stderr, "  !! 4x worse than 2x\n"); ok = false; }
+
+    // Echo locked to 1/4 notes: 120 BPM = 500 ms, 90 BPM = 667 ms
+    for (float bpm : {120.0f, 90.0f}) {
+        phs::PhsEffectsChain fx;
+        fx.prepare(fs);
+        fx.setTempo(bpm);
+        float p[phs::kNumParams];
+        for (uint32_t i = 0; i < phs::kNumParams; ++i) p[i] = phs::kParamMetadata[i].defaultValue;
+        p[phs::kParamReverbMix] = 0.0f;
+        p[phs::kParamTremoloDepth] = 0.0f;
+        p[phs::kParamDelayMix] = 1.0f;
+        p[phs::kParamDelayFeedback] = 0.0f;
+        p[phs::kParamEchoSync] = 3.0f / 7.0f; // 1/4
+        std::vector<float> out(48000);
+        for (int i = 0; i < 48000; ++i) {
+            float l, r;
+            fx.processStereoSample(i == 0 ? 0.3f : 0.0f, p, 0.0f, l, r);
+            out[i] = l;
+        }
+        size_t peak = 0;
+        for (size_t i = 9000; i < out.size(); ++i) if (std::fabs(out[i]) > std::fabs(out[peak < 9000 ? 9000 : peak])) peak = i;
+        const float expected = 60.0f / bpm * fs;
+        std::printf("  -> echo at %.0f BPM: repeat at %zu samples (expected %.0f)\n", bpm, peak, expected);
+        if (std::fabs(static_cast<float>(peak) - expected) > 300.0f) { std::fprintf(stderr, "  !! echo not locked to tempo\n"); ok = false; }
+    }
+    return ok;
+}
+
+bool testStateCompatibility() {
+    std::printf("[TEST 9] State round trip and loading a v3 (pre-expression) state...\n");
+    bool ok = true;
+    // Hand-built version 3 layout: header, 32 floats, 32 CC bytes, 64 reserved
+    std::vector<uint8_t> v3(12 + 4 * 32 + 32 + 64, 0);
+    const uint32_t magic = 0x50485345, ver = 3;
+    const int32_t preset = 2;
+    std::memcpy(&v3[0], &magic, 4); std::memcpy(&v3[4], &ver, 4); std::memcpy(&v3[8], &preset, 4);
+    for (int i = 0; i < 32; ++i) {
+        const float f = 0.25f + 0.01f * i;
+        std::memcpy(&v3[12 + 4 * i], &f, 4);
+    }
+    for (int i = 0; i < 32; ++i) v3[12 + 128 + i] = static_cast<uint8_t>(-1);
+    v3[12 + 128 + phs::kParamReverbMix] = 20; // CC20 -> reverb mix
+    phs::PhsSynthEngine e;
+    if (!e.setState(v3.data(), v3.size())) { std::fprintf(stderr, "  !! v3 state rejected\n"); return false; }
+    if (std::fabs(e.getParamNormalized(phs::kParamDelayFeedback) - (0.25f + 0.01f * phs::kParamDelayFeedback)) > 1e-5f) ok = false;
+    if (e.getParamCc(phs::kParamReverbMix) != 20) { std::fprintf(stderr, "  !! v3 CC map lost\n"); ok = false; }
+    if (e.getParamNormalized(phs::kParamMpeMode) != 0.0f || e.getParamNormalized(phs::kParamQuality) != 0.5f) { std::fprintf(stderr, "  !! new params not defaulted\n"); ok = false; }
+
+    e.setParamNormalized(phs::kParamMod3Dst, 0.5f);
+    e.setParamNormalized(phs::kParamLfo2Shape, 0.75f);
+    phs::PhsSynthEngine::SerializedState st{};
+    e.getState(st);
+    phs::PhsSynthEngine f;
+    if (!f.setState(&st, sizeof(st))) ok = false;
+    if (f.getParamNormalized(phs::kParamMod3Dst) != 0.5f || f.getParamNormalized(phs::kParamLfo2Shape) != 0.75f || f.getParamCc(phs::kParamReverbMix) != 20) {
+        std::fprintf(stderr, "  !! v4 round trip mismatch\n");
+        ok = false;
+    }
+    std::printf("  -> v3 load %s, v4 round trip %s\n", ok ? "ok" : "FAILED", ok ? "ok" : "FAILED");
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// v1.5: macros, studio effects, host modulation
+// ---------------------------------------------------------------------------
+std::vector<float> renderNote(const std::vector<std::pair<uint32_t, float>>& setup, int note, int frames) {
+    phs::PhsSynthEngine e;
+    e.prepare(48000.0f);
+    e.setParamNormalized(phs::kParamReverbMix, 0.0f);
+    e.setParamNormalized(phs::kParamTremoloDepth, 0.0f);
+    for (const auto& kv : setup) e.setParamNormalized(kv.first, kv.second);
+    e.handleMidiEvent(0x90, static_cast<uint8_t>(note), 100);
+    return renderMono(e, frames);
+}
+
+double correlation(const std::vector<float>& a, const std::vector<float>& b) {
+    double ab = 0, aa = 0, bb = 0;
+    for (size_t i = 0; i < std::min(a.size(), b.size()); ++i) { ab += a[i] * double(b[i]); aa += a[i] * double(a[i]); bb += b[i] * double(b[i]); }
+    return ab / std::sqrt(aa * bb + 1e-30);
+}
+
+bool allFinite(const std::vector<float>& x) {
+    for (float v : x) if (!std::isfinite(v)) return false;
+    return true;
+}
+
+bool testMacros() {
+    std::printf("[TEST 10] Impossible-instrument macros (material, pickups, gap FM, morph)...\n");
+    bool ok = true;
+    using namespace phs;
+
+    // Material: carbon rings longer than steel
+    const auto steel = renderNote({{kParamMaterial, 0.0f}}, 60, 72000);
+    const auto carbon = renderNote({{kParamMaterial, 1.0f}}, 60, 72000);
+    const float lateSteel = rmsOf(steel, 48000, 12000), lateCarbon = rmsOf(carbon, 48000, 12000);
+    std::printf("  -> late-tail rms: steel %.5f | carbon %.5f\n", lateSteel, lateCarbon);
+    if (!(lateCarbon > 1.5f * lateSteel)) { std::fprintf(stderr, "  !! material did not lengthen the ring\n"); ok = false; }
+
+    // Pickups: summing several pickups changes the tone, and stays finite and bounded
+    const auto one = renderNote({{kParamPickupCount, 0.0f}}, 48, 24000);
+    const auto four = renderNote({{kParamPickupCount, 1.0f}, {kParamPickupSpread, 1.0f}}, 48, 24000);
+    const double cPick = correlation(one, four);
+    std::printf("  -> 1 vs 4 pickups: correlation %.3f, rms %.4f vs %.4f\n", cPick, rmsOf(one, 2000, 20000), rmsOf(four, 2000, 20000));
+    if (!(cPick < 0.995) || !allFinite(four) || rmsOf(four, 2000, 20000) < 0.2f * rmsOf(one, 2000, 20000)) { std::fprintf(stderr, "  !! multi-pickup had no effect or blew up\n"); ok = false; }
+
+    // Gap FM: adds sidebands (differs from the plain note) but remains stable and in tune
+    const auto plain = renderNote({}, 60, 24000);
+    const auto fmod = renderNote({{kParamGapFmDepth, 0.8f}, {kParamGapFmRatio, 0.6f}}, 60, 24000);
+    const double cFm = correlation(plain, fmod);
+    const float f = autocorrFreq(fmod, 6000, 4096, 48000.0f);
+    std::printf("  -> gap FM: correlation %.3f, pitch %.1f Hz\n", cFm, f);
+    if (!(cFm < 0.98) || !allFinite(fmod) || std::fabs(f / 261.63f - 1.0f) > 0.05f) { std::fprintf(stderr, "  !! gap FM had no effect\n"); ok = false; }
+
+    // Morph: fully morphed tine == the reed played directly; half-way is a different, finite blend
+    const auto reed = renderNote({{kParamResonator, 1.0f}}, 60, 24000);
+    const auto morphed = renderNote({{kParamResonator, 0.0f}, {kParamResMorph, 1.0f}}, 60, 24000);
+    const auto half = renderNote({{kParamResonator, 0.0f}, {kParamResMorph, 0.5f}}, 60, 24000);
+    const double cMorph = correlation(reed, morphed);
+    std::printf("  -> morph 100%% vs reed: correlation %.4f | morph 50%% rms %.4f\n", cMorph, rmsOf(half, 2000, 20000));
+    if (!(cMorph > 0.99)) { std::fprintf(stderr, "  !! full morph is not the reed\n"); ok = false; }
+    if (!allFinite(half) || rmsOf(half, 2000, 20000) < 0.001f) { std::fprintf(stderr, "  !! half morph silent or unstable\n"); ok = false; }
+    // And back: reed morphing to tine
+    const auto tine = renderNote({{kParamResonator, 0.0f}}, 60, 24000);
+    const auto morphedBack = renderNote({{kParamResonator, 1.0f}, {kParamResMorph, 1.0f}}, 60, 24000);
+    if (!(correlation(tine, morphedBack) > 0.99)) { std::fprintf(stderr, "  !! reed to tine morph failed\n"); ok = false; }
+    return ok;
+}
+
+bool testStudioEffects() {
+    std::printf("[TEST 11] Studio effects (spring reverb, cabinets, post-EQ, compressor, meters, host modulation)...\n");
+    bool ok = true;
+    using namespace phs;
+    const float fs = 48000.0f;
+    auto defaults = [](float* p) { for (uint32_t i = 0; i < kNumParams; ++i) p[i] = kParamMetadata[i].defaultValue; p[kParamReverbMix] = 0; p[kParamTremoloDepth] = 0; };
+
+    // Spring reverb: an impulse leaves a decaying tail, different from the hall
+    float tailEnergy[2];
+    for (int type = 0; type < 2; ++type) {
+        PhsEffectsChain fx; fx.prepare(fs);
+        float p[kNumParams]; defaults(p);
+        p[kParamReverbMix] = 0.8f; p[kParamReverbDecay] = 0.8f; p[kParamReverbType] = static_cast<float>(type);
+        double e = 0; bool finite = true;
+        for (int i = 0; i < 48000; ++i) {
+            float l, r; fx.processStereoSample(i == 0 ? 0.4f : 0.0f, p, 0.0f, l, r);
+            if (i > 6000) e += l * double(l);
+            finite = finite && std::isfinite(l) && std::isfinite(r);
+        }
+        tailEnergy[type] = static_cast<float>(e);
+        if (!finite) { std::fprintf(stderr, "  !! reverb produced non-finite samples\n"); ok = false; }
+    }
+    std::printf("  -> reverb tail energy: hall %.4g | spring %.4g\n", tailEnergy[0], tailEnergy[1]);
+    if (!(tailEnergy[1] > 1e-6f)) { std::fprintf(stderr, "  !! spring reverb has no tail\n"); ok = false; }
+
+    // Cabinet types: the radio voicing removes the low end that a flat DI keeps
+    float lowRms[2];
+    for (int type = 0; type < 2; ++type) {
+        PhsEffectsChain fx; fx.prepare(fs);
+        float p[kNumParams]; defaults(p);
+        p[kParamCabType] = type ? 4.0f / 4.0f : 0.0f; p[kParamCabinet] = 1.0f;
+        if (type == 0) p[kParamCabinet] = 0.0f;
+        double acc = 0;
+        for (int i = 0; i < 24000; ++i) {
+            float l, r; fx.processStereoSample(0.1f * std::sin(2.0f * 3.14159265f * 110.0f * i / fs), p, 0.0f, l, r);
+            if (i > 8000) acc += l * double(l);
+        }
+        lowRms[type] = static_cast<float>(std::sqrt(acc / 16000.0));
+    }
+    std::printf("  -> 110 Hz through cabinet: DI %.4f | radio %.4f\n", lowRms[0], lowRms[1]);
+    if (!(lowRms[1] < 0.35f * lowRms[0])) { std::fprintf(stderr, "  !! radio cabinet did not roll off the lows\n"); ok = false; }
+
+    // Post-EQ: +12 dB bell at 1 kHz
+    float eqGain;
+    {
+        double rms[2];
+        for (int on = 0; on < 2; ++on) {
+            PhsEffectsChain fx; fx.prepare(fs);
+            float p[kNumParams]; defaults(p);
+            p[kParamEqFreq] = std::log(1000.0f / 200.0f) / std::log(25.0f);
+            p[kParamEqGain] = on ? 1.0f : 0.5f;
+            double acc = 0;
+            for (int i = 0; i < 24000; ++i) {
+                float l, r; fx.processStereoSample(0.02f * std::sin(2.0f * 3.14159265f * 1000.0f * i / fs), p, 0.0f, l, r);
+                if (i > 8000) acc += l * double(l);
+            }
+            rms[on] = std::sqrt(acc / 16000.0);
+        }
+        eqGain = static_cast<float>(20.0 * std::log10(rms[1] / rms[0]));
+    }
+    std::printf("  -> post-EQ +12 dB at 1 kHz measured %+.1f dB\n", eqGain);
+    if (std::fabs(eqGain - 12.0f) > 1.5f) { std::fprintf(stderr, "  !! post-EQ gain off\n"); ok = false; }
+
+    // Compressor: gain reduction reported, and loud/quiet ratio narrowed
+    {
+        double level[2][2];
+        float gr = 0, meter = 0;
+        for (int on = 0; on < 2; ++on) {
+            PhsEffectsChain fx; fx.prepare(fs);
+            float p[kNumParams]; defaults(p);
+            p[kParamCompAmount] = on ? 1.0f : 0.0f;
+            for (int lv = 0; lv < 2; ++lv) {
+                double acc = 0;
+                const float amp = lv ? 0.5f : 0.05f;
+                for (int i = 0; i < 48000; ++i) {
+                    float l, r; fx.processStereoSample(amp * std::sin(2.0f * 3.14159265f * 440.0f * i / fs), p, 0.0f, l, r);
+                    if (i > 24000) acc += l * double(l);
+                }
+                level[on][lv] = std::sqrt(acc / 24000.0);
+            }
+            if (on) { gr = fx.gainReductionDb(); meter = fx.meterL(); }
+        }
+        const double spreadOff = level[0][1] / level[0][0], spreadOn = level[1][1] / level[1][0];
+        std::printf("  -> compressor: loud/quiet %.2fx -> %.2fx, gain reduction %.1f dB, meter %.3f\n", spreadOff, spreadOn, gr, meter);
+        if (!(spreadOn < 0.8 * spreadOff) || !(gr < -1.0f) || !(meter > 0.01f)) { std::fprintf(stderr, "  !! compressor or meters failed\n"); ok = false; }
+    }
+
+    // Host modulation (CLAP PARAM_MOD): -50 % on Volume lowers the level without moving the knob
+    {
+        float lvl[2];
+        for (int m = 0; m < 2; ++m) {
+            PhsSynthEngine e; e.prepare(fs);
+            e.setParamNormalized(kParamReverbMix, 0.0f);
+            if (m) e.setHostModulation(kParamMasterVolume, -0.5f);
+            e.handleMidiEvent(0x90, 60, 100);
+            lvl[m] = rmsOf(renderMono(e, 14000), 4000, 8000);
+            if (m && std::fabs(e.getParamNormalized(kParamMasterVolume) - 0.78f) > 1e-5f) { std::fprintf(stderr, "  !! host mod moved the knob\n"); ok = false; }
+        }
+        std::printf("  -> host modulation on Volume: rms %.4f -> %.4f\n", lvl[0], lvl[1]);
+        if (!(lvl[1] < 0.8f * lvl[0])) { std::fprintf(stderr, "  !! host modulation had no effect\n"); ok = false; }
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// v1.6: mastering EQ, compressor / limiter, cabinets
+// ---------------------------------------------------------------------------
+double sineGainDb(float* p, float freq, float amp, float fs = 48000.0f) {
+    phs::PhsEffectsChain fx; fx.prepare(fs);
+    double in = 0, out = 0;
+    for (int i = 0; i < 48000; ++i) {
+        const float x = amp * std::sin(2.0f * 3.14159265f * freq * i / fs);
+        float l, r; fx.processStereoSample(x, p, 0.0f, l, r);
+        if (i > 24000) { in += x * double(x); out += l * double(l); }
+    }
+    return 10.0 * std::log10((out + 1e-30) / in);
+}
+
+bool testMasteringChain() {
+    std::printf("[TEST 12] Mastering EQ, compressor, limiter and cabinets...\n");
+    bool ok = true;
+    using namespace phs;
+    auto defaults = [](float* p) { for (uint32_t i = 0; i < kNumParams; ++i) p[i] = kParamMetadata[i].defaultValue; p[kParamReverbMix] = 0; p[kParamTremoloDepth] = 0; p[kParamPreampDrive] = 0.05f; p[kParamMasterVolume] = 0.8f; };
+
+    // EQ: the measured level must follow the analytic curve the editor draws (all four bands active)
+    float p[kNumParams]; defaults(p);
+    p[kParamEqB1Gain] = 0.5f + 6.0f / 24.0f;  // +6 dB low shelf
+    p[kParamEqB2Gain] = 0.5f - 5.0f / 24.0f;  // -5 dB bell
+    p[kParamEqGain] = 0.5f + 8.0f / 24.0f;    // +8 dB bell
+    p[kParamEqB4Gain] = 0.5f + 4.0f / 24.0f;  // +4 dB high shelf
+    wurli::Biquad bands[4];
+    for (int b = 0; b < 4; ++b) setupEqBand(bands[b], b, p, 48000.0);
+    double worst = 0;
+    for (float f : {50.0f, 250.0f, 1000.0f, 9000.0f}) {
+        double analytic = 0;
+        for (auto& bq : bands) analytic += 20.0 * std::log10(bq.magnitude(f, 48000.0));
+        float q[kNumParams]; defaults(q); std::memcpy(q, p, sizeof(q));
+        float base[kNumParams]; defaults(base);
+        const double measured = sineGainDb(q, f, 0.02f) - sineGainDb(base, f, 0.02f);
+        worst = std::max(worst, std::fabs(measured - analytic));
+        std::printf("  -> EQ at %5.0f Hz: analytic %+5.2f dB | measured %+5.2f dB\n", f, analytic, measured);
+    }
+    if (worst > 0.5) { std::fprintf(stderr, "  !! EQ curve disagrees with the audio\n"); ok = false; }
+
+    // Compressor: static gain computer, -6 dB in, threshold -18, 4:1, hard knee, no make-up: -9 dB of reduction
+    {
+        float c[kNumParams]; defaults(c);
+        c[kParamCompAmount] = 1.0f; c[kParamCompThresh] = 22.0f / 40.0f; c[kParamCompRatio] = std::log(4.0f) / std::log(20.0f);
+        c[kParamMasterVolume] = 0.15f; c[kParamCompKnee] = 0.0f; c[kParamCompAuto] = 0.0f; c[kParamCompAttack] = 0.2f; c[kParamCompRelease] = 0.3f;
+        float off[kNumParams]; defaults(off); off[kParamMasterVolume] = 0.15f;
+        // Slope of the gain computer: every 6 dB more input is 6 * (1 - 1/4) = 4.5 dB more reduction
+        const double r1 = sineGainDb(c, 440.0f, 0.25f) - sineGainDb(off, 440.0f, 0.25f);
+        const double r2 = sineGainDb(c, 440.0f, 0.5f) - sineGainDb(off, 440.0f, 0.5f);
+        std::printf("  -> compressor 4:1: reduction %.2f dB at -12 dB in, %.2f dB at -6 dB in (step %.2f, expect -4.5)\n", r1, r2, r2 - r1);
+        if (std::fabs((r2 - r1) + 4.5) > 1.0) { std::fprintf(stderr, "  !! compressor ratio off\n"); ok = false; }
+        // Makeup restores level; the RMS detector and sidechain filter stay stable
+        c[kParamCompMakeup] = 9.0f / 18.0f; c[kParamCompDetect] = 1.0f; c[kParamCompHpf] = 0.3f;
+        const double made = sineGainDb(c, 440.0f, 0.5f) - sineGainDb(off, 440.0f, 0.5f);
+        std::printf("  -> with +9 dB make-up, RMS detector, sidechain HPF: %.2f dB\n", made);
+        if (!std::isfinite(made) || made < -6.0 || made > 6.0) { std::fprintf(stderr, "  !! make-up / RMS path wrong\n"); ok = false; }
+    }
+
+    // Limiter: nothing above the ceiling
+    {
+        float l[kNumParams]; defaults(l);
+        l[kParamLimOn] = 1.0f; l[kParamLimCeil] = (-6.0f + 12.0f) / 12.0f; // -6 dB
+        PhsEffectsChain fx; fx.prepare(48000.0f);
+        float peak = 0;
+        for (int i = 0; i < 48000; ++i) {
+            float a, b; fx.processStereoSample(0.9f * std::sin(2.0f * 3.14159265f * 300.0f * i / 48000.0f), l, 0.0f, a, b);
+            if (i > 2000) peak = std::max(peak, std::fabs(a));
+        }
+        std::printf("  -> limiter ceiling -6 dB (0.501): peak %.3f\n", peak);
+        if (peak > 0.55f) { std::fprintf(stderr, "  !! limiter exceeded its ceiling\n"); ok = false; }
+    }
+
+    // Cabinets: every type is stable, and the plotted response matches the audio (linear types, room off)
+    for (int type = 1; type <= 9; ++type) {
+        CabinetModel cm; cm.prepare(48000.0f);
+        cm.configure(type, 0.4f, 0.3f, 0.0f, 0.0f);
+        bool finite = true; float peak = 0;
+        for (int i = 0; i < 48000; ++i) { const float y = cm.process(0.1f * std::sin(2.0f * 3.14159265f * 440.0f * i / 48000.0f)); finite = finite && std::isfinite(y); peak = std::max(peak, std::fabs(y)); }
+        if (!finite || peak > 4.0f) { std::fprintf(stderr, "  !! cabinet %d unstable\n", type); ok = false; }
+    }
+    {
+        CabinetModel cm; cm.prepare(48000.0f);
+        cm.configure(5, 0.4f, 0.3f, 0.0f, 0.0f); // studio condenser: linear
+        double in = 0, out = 0;
+        for (int i = 0; i < 48000; ++i) {
+            const float x = 0.01f * std::sin(2.0f * 3.14159265f * 3000.0f * i / 48000.0f);
+            const float y = cm.process(x);
+            if (i > 24000) { in += x * double(x); out += y * double(y); }
+        }
+        const double measured = 10.0 * std::log10(out / in), analytic = CabinetModel::responseDb(5, 0.4f, 0.3f, 3000.0);
+        std::printf("  -> studio condenser at 3 kHz: plotted %+.2f dB | measured %+.2f dB\n", analytic, measured);
+        if (std::fabs(measured - analytic) > 0.6) { std::fprintf(stderr, "  !! cabinet curve disagrees with the audio\n"); ok = false; }
+    }
+    return ok;
+}
+
 } // namespace
 
 int main() {
@@ -490,6 +1018,13 @@ int main() {
     ok &= testVst3Bundle("build/electropiano.vst3/Contents/MacOS/electropiano");
     ok &= testAuBundle("build/electropiano.component/Contents/MacOS/electropiano");
 #endif
+    ok &= testExpression();
+    ok &= testModulationMatrix();
+    ok &= testOversamplingAndSync();
+    ok &= testStateCompatibility();
+    ok &= testMacros();
+    ok &= testStudioEffects();
+    ok &= testMasteringChain();
     renderShowcaseDemos();
 
     if (ok) {

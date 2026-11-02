@@ -101,15 +101,22 @@ public:
         qTb_ = pTb_ = 0.0;
         qBeam_.fill(0.0);
         pBeam_.fill(0.0);
-        coilLPState_ = coilBPState_ = 0.0f;
+        resetPickupPaths();
         dcBlockX1_ = dcBlockY1_ = 0.0f;
         coeffsDirty_ = true;
-        coilQParam_ = -1.0f;
         telemetry_ = {};
     }
 
-    void noteOn(int midiNote, float velocity, const float* params) {
+    // channel: MIDI channel the note arrived on (MPE gives each note its own); the expression
+    // arguments are the per-note controller values already received for that channel.
+    void noteOn(int midiNote, float velocity, const float* params, int channel = 0,
+                float bendSemis = 0.0f, float pressure = 0.0f, float slide = 0.5f) {
         midiNote_ = midiNote;
+        channel_ = channel;
+        bendTarget_ = bendCur_ = bendSemis;
+        bendApplied_ = 0.0f;
+        pressure_ = pressure;
+        slide_ = slide;
         velocity_ = std::clamp(velocity, 0.01f, 1.0f);
         active_ = true;
         releasing_ = false;
@@ -119,8 +126,9 @@ public:
         ageSamples_ = 0;
         releaseAgeSamples_ = 0;
         reedDamperStarted_ = false;
-        coilLPState_ = coilBPState_ = 0.0f;
-        coilQParam_ = -1.0f;
+        resetPickupPaths();
+        tineDone_ = reedDone_ = false;
+        fmPhase_ = 0.0f;
         dcBlockX1_ = dcBlockY1_ = 0.0f;
         xPrevMm_ = 0.0;
         geomKey_ = -1.0f;
@@ -128,21 +136,39 @@ public:
         resonator_ = stepIndex(params[kParamResonator], 1) ? Resonator::Reed : Resonator::Tine;
         pickup_ = stepIndex(params[kParamPickupType], 1) ? Pickup::Electrostatic : Pickup::Magnetic;
         modelType_ = stepIndex(params[kParamModelType], 3);
-        f0_ = 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
+        f0Base_ = 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
+        f0_ = f0Base_ * std::pow(2.0f, bendSemis / 12.0f);
+        bendApplied_ = bendSemis;
         keyScale_ = std::clamp((static_cast<float>(midiNote) - 21.0f) / 87.0f, 0.0f, 1.0f);
 
-        if (resonator_ == Resonator::Reed) {
-            noteOnReed(params);
-        } else {
-            noteOnTine(params);
-        }
+        // Morph: with the knob above zero the note runs both resonators (the chosen one is path 0,
+        // the other path 1) and crossfades their pickup outputs, so it can sweep within the note
+        dual_ = params[kParamResMorph] > 0.001f;
+        hasReed_ = resonator_ == Resonator::Reed || dual_;
+        hasTine_ = resonator_ == Resonator::Tine || dual_;
+        tinePath_ = resonator_ == Resonator::Tine ? 0 : 1;
+        reedPath_ = 1 - tinePath_;
+        if (hasReed_) noteOnReed(params);
+        if (hasTine_) noteOnTine(params); // last, so the tine's velocity shaping drives the action noise
 
         // Electrostatic pickup: the comb section and side of the band follow the note
         const int wMidi = std::clamp(midiNote, wurli::kMidiLo, wurli::kMidiHi);
-        const double swingMm = resonator_ == Resonator::Reed ? reed_.swingMm() : 1.0;
-        esPickup_.init(fs_, wMidi, swingMm, electrostaticRestMm(params[kParamPickupSymmetry]),
-                       wurli::kCTotal * std::pow(2.0, (0.45 - params[kParamPickupResonance]) * 2.0));
+        for (int path = 0; path < (dual_ ? 2 : 1); ++path) {
+            const double swingMm = path == reedPath_ ? reed_.swingMm() : 1.0;
+            pp_[path].es.init(fs_, wMidi, swingMm, electrostaticRestMm(params[kParamPickupSymmetry]),
+                              wurli::kCTotal * std::pow(2.0, (0.45 - params[kParamPickupResonance]) * 2.0));
+        }
+        if (hasReed_) reed_.setPitchScale(std::pow(2.0, bendSemis / 12.0));
+        updateExpressionTargets(params);
     }
+
+    // Per-note controllers, set from the audio thread as they arrive
+    void setExpression(float bendSemis, float pressure, float slide) {
+        bendTarget_ = bendSemis;
+        pressure_ = pressure;
+        slide_ = slide;
+    }
+    int getChannel() const { return channel_; }
 
     void noteOff(bool sustainPedalDown) {
         if (sustainPedalDown) {
@@ -165,8 +191,30 @@ public:
     float processSample(const float* params) {
         if (!active_) return 0.0f;
         ++ageSamples_;
+        if ((ageSamples_ & 7) == 0) {
+            updateExpressionTargets(params);
+            if ((ageSamples_ & 31) == 0) updateBend(params);
+        }
 
-        float out = resonator_ == Resonator::Reed ? processReed(params) : processTine(params);
+        if (fmDepth_ > 0.001f) {
+            fmPhase_ += fmInc_;
+            if (fmPhase_ >= kTwoPi) fmPhase_ -= kTwoPi;
+            fmS_ = std::sin(fmPhase_);
+            fmC_ = std::cos(fmPhase_);
+        } else {
+            fmS_ = fmC_ = 0.0f;
+        }
+
+        const float yTine = (hasTine_ && !tineDone_) ? processTine(params) : 0.0f;
+        const float yReed = (hasReed_ && !reedDone_) ? processReed(params) : 0.0f;
+        float out;
+        if (dual_) {
+            const bool primaryReed = resonator_ == Resonator::Reed;
+            out = primaryReed ? morphA_ * yReed + morphB_ * yTine : morphA_ * yTine + morphB_ * yReed;
+        } else {
+            out = hasReed_ ? yReed : yTine;
+        }
+        if ((!hasTine_ || tineDone_) && (!hasReed_ || reedDone_)) active_ = false;
 
         const float yDc = out - dcBlockX1_ + dcBlockR_ * dcBlockY1_;
         dcBlockX1_ = out;
@@ -183,6 +231,39 @@ public:
 
 private:
     // =========================================================================
+    // Per-note expression
+    // =========================================================================
+    // Pressure pulls the pickup closer; slide opens the coil resonance. Both are offsets on
+    // the panel knobs (so modulation and expression stack), refreshed every 8 samples.
+    void updateExpressionTargets(const float* params) {
+        const float pressureAmt = modAmount(params[kParamPressureAmt]);
+        const float slideAmt = modAmount(params[kParamSlideAmt]);
+        gapEff_ = std::clamp(params[kParamPickupDistance] + 0.40f * pressure_ * pressureAmt, 0.0f, 1.0f);
+        qEff_ = std::clamp(params[kParamPickupResonance] + 0.55f * (slide_ - 0.5f) * 2.0f * slideAmt, 0.0f, 1.0f);
+        fmDepth_ = params[kParamGapFmDepth];
+        fmInc_ = std::min(3.0f, kTwoPi * f0_ * gapFmRatio(params[kParamGapFmRatio]) / fs_);
+        pickupCount_ = pickupCountFromNorm(params[kParamPickupCount]);
+        pickupSpreadMm_ = pickupSpreadMm(params[kParamPickupSpread]);
+        const float morph = std::clamp(params[kParamResMorph], 0.0f, 1.0f);
+        if (morph != morphCached_) {
+            morphCached_ = morph;
+            morphA_ = std::cos(0.5f * kPi * morph);
+            morphB_ = std::sin(0.5f * kPi * morph);
+        }
+    }
+
+    // Glide toward the target bend (about 1.5 ms) and retune the resonator when it has moved
+    void updateBend(const float*) {
+        bendCur_ += 0.30f * (bendTarget_ - bendCur_);
+        if (std::fabs(bendCur_ - bendApplied_) < 0.002f) return;
+        bendApplied_ = bendCur_;
+        const float ratio = std::pow(2.0f, bendCur_ / 12.0f);
+        f0_ = f0Base_ * ratio;
+        if (hasReed_) reed_.setPitchScale(ratio);
+        if (hasTine_) updateTuning_ = true;
+    }
+
+    // =========================================================================
     // Rhodes tine
     // =========================================================================
     void noteOnTine(const float* params) {
@@ -195,6 +276,7 @@ private:
         lastDecayParam_ = params[kParamTineDecay];
         lastBellParam_ = params[kParamTineBell];
         lastTbParam_ = params[kParamToneBarCoupling];
+        lastMaterialParam_ = params[kParamMaterial];
 
         // --- Hammer: mass + nonlinear felt (PyPHS mechanics.felt) ---
         // H_felt(xi) = k/(alpha+1) * xi^(alpha+1); damper force = lambda * xi^(alpha-1) * dxi/dt
@@ -231,13 +313,15 @@ private:
         const float toneBarParam = params[kParamToneBarCoupling];
         const float hardness = params[kParamHammerHardness];
 
-        float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_);
+        const float material = params[kParamMaterial];
+        float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_) * materialDecayMul(material);
         if (modelType_ == 2) baseT60 *= 0.68f; // steel-reed voiced tine
 
         for (int m = 0; m < kNumBeamModes; ++m) {
             float ratio = kModalFreqRatios[m];
             if (modelType_ == 2 && m == 1) ratio = 5.45f - 0.30f * toneBarParam;
             else if (modelType_ == 1 && m == 1) ratio = 6.268f;
+            if (m == 1 || m == 2) ratio *= materialBellStretch(material);
 
             const float fm = f0_ * ratio;
             if (fm >= 0.44f * fs_) {
@@ -257,8 +341,8 @@ private:
             stiffMode_[m] = mEff * omegaMode_[m] * omegaMode_[m];
 
             float modeT60 = baseT60;
-            if (m == 1) modeT60 = (0.025f + 0.60f * bellParam * bellParam) * (0.35f + 0.65f * keyScale_);
-            else if (m == 2) modeT60 = (0.010f + 0.065f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_));
+            if (m == 1) modeT60 = (0.025f + 0.60f * bellParam * bellParam) * (0.35f + 0.65f * keyScale_) * materialBellDecayMul(material);
+            else if (m == 2) modeT60 = (0.010f + 0.065f * bellParam) * (0.4f + 0.6f * (1.0f - keyScale_)) * materialBellDecayMul(material);
             else if (m == 3) modeT60 = baseT60 * (0.45f + 0.45f * toneBarParam);
             else if (m == 4) modeT60 = baseT60 * (0.30f + 0.35f * toneBarParam);
             dampMode_[m] = 13.81551f / std::max(0.012f, modeT60);
@@ -311,7 +395,8 @@ private:
         // mode is referred to the fundamental's omega: upper modes keep their natural omega_m/omega_0
         // emphasis rather than being flattened to displacement.
         for (int m = 0; m < kNumBeamModes; ++m) {
-            vTipWeight_[m] = modeActive_[m] ? cPickup_[m] * kChimePickupBoost[m] / (massMode_[m] * omegaMode_[0]) : 0.0f;
+            const float chime = (m == 1 || m == 2) ? materialChimeMul(material) : 1.0f;
+            vTipWeight_[m] = modeActive_[m] ? chime * cPickup_[m] * kChimePickupBoost[m] / (massMode_[m] * omegaMode_[0]) : 0.0f;
         }
         coeffsDirty_ = true;
     }
@@ -337,16 +422,22 @@ private:
     float processTine(const float* params) {
         if ((ageSamples_ & 63) == 0) {
             const int newModel = stepIndex(params[kParamModelType], 3);
+            if (updateTuning_) {
+                updateTuning_ = false;
+                updateModalParameters(params);
+            }
             if (newModel != modelType_ || std::fabs(params[kParamStrikePosition] - lastStrikeParam_) > 1e-4f ||
                 std::fabs(params[kParamTineDecay] - lastDecayParam_) > 1e-4f ||
                 std::fabs(params[kParamTineBell] - lastBellParam_) > 1e-4f ||
-                std::fabs(params[kParamToneBarCoupling] - lastTbParam_) > 1e-4f) {
+                std::fabs(params[kParamToneBarCoupling] - lastTbParam_) > 1e-4f ||
+                std::fabs(params[kParamMaterial] - lastMaterialParam_) > 1e-4f) {
                 modelType_ = newModel;
                 updateModalParameters(params);
                 lastStrikeParam_ = params[kParamStrikePosition];
                 lastDecayParam_ = params[kParamTineDecay];
                 lastBellParam_ = params[kParamTineBell];
                 lastTbParam_ = params[kParamToneBarCoupling];
+                lastMaterialParam_ = params[kParamMaterial];
             }
         }
 
@@ -473,7 +564,7 @@ private:
         float vTipNorm = static_cast<float>((pBeam_[0] / massMode_[0]) + tbWeight * (pTb_ / massTb_)) / omegaMode_[0];
         for (int m = 1; m < kNumBeamModes; ++m) vTipNorm += vTipWeight_[m] * static_cast<float>(pBeam_[m]);
 
-        float out = runPickup(params, wBody, vTipNorm);
+        float out = runPickup(params, wBody, vTipNorm, tinePath_, false);
 
         // Mechanical action sounds: 110 Hz keybed thud + 920 Hz escapement click, damper tap on release
         const float thumpParam = params[kParamKeyNoise];
@@ -500,9 +591,9 @@ private:
         telemetry_.hammerCompression = static_cast<float>(xiPrev_);
 
         if (releasing_ && releaseEnv_ < 1e-4f) {
-            active_ = false;
+            tineDone_ = true;
         } else if (hammerDetached_ && ageSamples_ > 256 && beamEnergy < 1e-9 && std::fabs(out) < 1e-6f) {
-            active_ = false;
+            tineDone_ = true;
         }
         return out;
     }
@@ -517,8 +608,8 @@ private:
         shapedVel_ = static_cast<float>(vel);
         wurli::ReedVoicing v;
         // Every control sits at OpenWurli's calibration when at its default position
-        v.decayScale = std::pow(2.0, -(params[kParamTineDecay] - 0.65) * 4.0);
-        v.overtoneScale = std::pow(2.0, (params[kParamTineBell] - 0.55) * 5.0);
+        v.decayScale = std::pow(2.0, -(params[kParamTineDecay] - 0.65) * 4.0) / materialDecayMul(params[kParamMaterial]);
+        v.overtoneScale = std::pow(2.0, (params[kParamTineBell] - 0.55) * 5.0) * materialChimeMul(params[kParamMaterial]);
         v.noiseScale = std::clamp(params[kParamKeyNoise] / 0.30, 0.0, 3.5);
         v.damperScale = std::pow(2.0, (params[kParamHammerHysteresis] - 0.35) * 2.0);
         v.dwellVelocityOffset = (params[kParamHammerHardness] - 0.48) * 0.8;
@@ -537,7 +628,7 @@ private:
         const double vNorm = (xMm - xPrevMm_) * fs_ / (wurli::kTau * reed_.fundamentalHz());
         xPrevMm_ = xMm;
 
-        float out = runPickup(params, static_cast<float>(xMm), static_cast<float>(vNorm));
+        float out = runPickup(params, static_cast<float>(xMm), static_cast<float>(vNorm), reedPath_, true);
 
         const double env = reed_.envelope();
         telemetry_.totalHamiltonian = env * env;
@@ -546,32 +637,33 @@ private:
         telemetry_.tipDisplacement = static_cast<float>(xMm);
         telemetry_.tipVelocity = static_cast<float>(vNorm);
         telemetry_.hammerCompression = 0.0f;
-        if (reed_.isSilent()) active_ = false;
+        if (reed_.isSilent()) reedDone_ = true;
         return out;
     }
 
     // =========================================================================
     // Pickups. tipMm: displacement at the pickup (mm); vNorm: velocity / omega0 (mm)
     // =========================================================================
-    float runPickup(const float* params, float tipMm, float vNorm) {
+    float runPickup(const float* params, float tipMm, float vNorm, int path, bool asReed) {
+        PickupPath& pp = pp_[path];
         if (pickup_ == Pickup::Electrostatic) {
-            const double swing = electrostaticSwingScale(params[kParamPickupDistance]);
+            const double swing = electrostaticSwingScale(gapEff_) * (1.0 + 0.6 * fmDepth_ * fmS_);
             double volts;
-            if (resonator_ == Resonator::Reed) {
-                volts = esPickup_.process(tipMm / reed_.swingMm() * swing) * reed_.outputScale();
+            if (asReed) {
+                volts = pp.es.process(tipMm / reed_.swingMm() * swing) * reed_.outputScale();
             } else {
                 // A tine's few tenths of a mm against the comb: bandSign orients it like a reed
-                volts = esPickup_.processPenetration(esPickup_.bandSign() * tipMm * swing - esPickup_.restOffsetMm()) * kTineElectrostaticGain;
+                volts = pp.es.processPenetration(pp.es.bandSign() * tipMm * swing - pp.es.restOffsetMm()) * kTineElectrostaticGain;
             }
             return static_cast<float>(volts * kVoiceUnitsPerVolt);
         }
 
         // --- Electromagnetic: Falaize & Helie eq. (25) ---
-        const float gapKey = params[kParamPickupDistance] * 7.0f + params[kParamPickupSymmetry] * 131.0f + modelType_;
+        const float gapKey = gapEff_ * 7.0f + params[kParamPickupSymmetry] * 131.0f + modelType_;
         if (gapKey != geomKey_) {
             geomKey_ = gapKey;
             const bool dyno = (modelType_ == 1 || modelType_ == 3);
-            emLh_ = magneticGapMm(params[kParamPickupDistance]) * 1e-3 * (dyno ? 0.85 : 1.0);
+            emLh_ = magneticGapMm(gapEff_) * 1e-3 * (dyno ? 0.85 : 1.0);
             emLv_ = magneticOffsetMm(params[kParamPickupSymmetry]) * 1e-3;
             emRp_ = (dyno ? 1.2 : 1.0) * 1e-3;
             // Level reference: small-signal fundamental and octave sensitivities. Half of the
@@ -579,30 +671,49 @@ private:
             static const double refDefault = magneticLevelRef(magneticGapMm(0.5f) * 1e-3, magneticOffsetMm(0.4f) * 1e-3, 1e-3);
             emNorm_ = -1.0 / std::sqrt(magneticLevelRef(emLh_, emLv_, emRp_) * refDefault);
         }
-        const double sens = falaizeHeliePickupSensitivity(static_cast<double>(tipMm) * 1e-3, kRb, emRp_, emLh_, emLv_);
+        // Physical FM: the gap and offset are swung at audio rate; several pickups along the tine
+        // (fanned out from the base offset, so their contributions add rather than cancel) are summed in phase
+        const double lhNow = emLh_ * (1.0 + 0.6 * fmDepth_ * fmS_);
+        const double lvBase = emLv_ + 0.5e-3 * fmDepth_ * fmC_;
+        const int n = pickupCount_;
+        double sens = 0.0;
+        for (int k = 0; k < n; ++k) {
+            const double lv = lvBase + k * pickupSpreadMm_ * 1e-3; // fanned out from the base offset
+            sens += falaizeHeliePickupSensitivity(static_cast<double>(tipMm) * 1e-3, kRb, emRp_, lhNow, lv);
+        }
+        sens /= n;
         const float transducerSignal = static_cast<float>(sens * emNorm_) * vNorm * kMagneticGain
-                                     * (resonator_ == Resonator::Reed ? kReedMagneticGain : 1.0f);
+                                     * (asReed ? kReedMagneticGain : 1.0f);
 
         // Coil RLC resonance (2-pole SVF): low-pass with a resonant presence peak
-        const float pickupQParam = params[kParamPickupResonance];
-        if (pickupQParam != coilQParam_ || modelType_ != coilModel_) {
+        const float pickupQParam = qEff_;
+        if (pickupQParam != pp.coilQ || modelType_ != pp.coilModel) {
             const float resFreq = (modelType_ == 1) ? (1900.0f + 3300.0f * pickupQParam)
                                 : (modelType_ == 2) ? (1700.0f + 2900.0f * pickupQParam)
                                                     : (1800.0f + 3100.0f * pickupQParam);
             const float g = std::tan(kPi * std::min(resFreq, 0.44f * fs_) * dt_);
             const float kDamp = 1.60f - 1.22f * pickupQParam;
-            coilA1_ = 1.0f / (1.0f + g * (g + kDamp));
-            coilA2_ = g * coilA1_;
-            coilA3_ = g * coilA2_;
-            coilQParam_ = pickupQParam;
-            coilModel_ = modelType_;
+            pp.a1 = 1.0f / (1.0f + g * (g + kDamp));
+            pp.a2 = g * pp.a1;
+            pp.a3 = g * pp.a2;
+            pp.coilQ = pickupQParam;
+            pp.coilModel = modelType_;
         }
-        const float v3 = transducerSignal - coilLPState_;
-        const float v1 = coilA1_ * coilBPState_ + coilA2_ * v3;
-        const float v2 = coilLPState_ + coilA2_ * coilBPState_ + coilA3_ * v3;
-        coilBPState_ = 2.0f * v1 - coilBPState_;
-        coilLPState_ = 2.0f * v2 - coilLPState_;
+        const float v3 = transducerSignal - pp.lp;
+        const float v1 = pp.a1 * pp.bp + pp.a2 * v3;
+        const float v2 = pp.lp + pp.a2 * pp.bp + pp.a3 * v3;
+        pp.bp = 2.0f * v1 - pp.bp;
+        pp.lp = 2.0f * v2 - pp.lp;
         return v2 + (0.05f + 0.95f * pickupQParam) * v1;
+    }
+
+    void resetPickupPaths() {
+        for (auto& pp : pp_) {
+            pp.lp = pp.bp = 0.0f;
+            pp.coilQ = -1.0f;
+            pp.coilModel = -1;
+        }
+        geomKey_ = -1.0f;
     }
 
     static double magneticLevelRef(double lh, double lv, double rp) {
@@ -698,7 +809,13 @@ private:
     float velocity_ = 0.0f;
     float shapedVel_ = 0.0f;
     float f0_ = 440.0f;
+    float f0Base_ = 440.0f;
     float keyScale_ = 0.5f;
+    int channel_ = 0;
+    float bendTarget_ = 0.0f, bendCur_ = 0.0f, bendApplied_ = 0.0f;
+    float pressure_ = 0.0f, slide_ = 0.5f;
+    float gapEff_ = 0.5f, qEff_ = 0.45f;
+    bool updateTuning_ = false;
     uint64_t ageSamples_ = 0;
     uint64_t releaseAgeSamples_ = 0;
 
@@ -706,6 +823,7 @@ private:
     float lastDecayParam_ = -1.0f;
     float lastBellParam_ = -1.0f;
     float lastTbParam_ = -1.0f;
+    float lastMaterialParam_ = -1.0f;
 
     // Hammer (H): mass + felt
     double mHammer_ = 1.0;
@@ -750,14 +868,22 @@ private:
     uint32_t noiseSeed_ = 0x9E3779B9u;
 
     // Pickups
-    wurli::ElectrostaticPickup esPickup_;
+    // One pickup chain per running resonator (path 0 is the chosen resonator, path 1 the morph target)
+    struct PickupPath {
+        wurli::ElectrostaticPickup es;
+        float coilQ = -1.0f;
+        int coilModel = -1;
+        float a1 = 0.0f, a2 = 0.0f, a3 = 0.0f, lp = 0.0f, bp = 0.0f;
+    };
+    std::array<PickupPath, 2> pp_{};
+    bool dual_ = false, hasTine_ = true, hasReed_ = false, tineDone_ = false, reedDone_ = false;
+    int tinePath_ = 0, reedPath_ = 1;
+    float morphA_ = 1.0f, morphB_ = 0.0f, morphCached_ = -1.0f;
+    float fmDepth_ = 0.0f, fmInc_ = 0.0f, fmPhase_ = 0.0f, fmS_ = 0.0f, fmC_ = 0.0f;
+    int pickupCount_ = 1;
+    float pickupSpreadMm_ = 0.0f;
     float geomKey_ = -1.0f;
     double emLh_ = 1e-3, emLv_ = 0.5e-3, emRp_ = 1e-3, emNorm_ = 1.0;
-    float coilQParam_ = -1.0f;
-    int coilModel_ = -1;
-    float coilA1_ = 0.0f, coilA2_ = 0.0f, coilA3_ = 0.0f;
-    float coilLPState_ = 0.0f;
-    float coilBPState_ = 0.0f;
     float dcBlockX1_ = 0.0f;
     float dcBlockY1_ = 0.0f;
 

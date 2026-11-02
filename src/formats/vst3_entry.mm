@@ -185,7 +185,7 @@ private:
 };
 
 // Combined Single-Component VST3 Instrument implementing IComponent, IAudioProcessor, and IEditController
-class PhsVst3Component : public IComponent, public IAudioProcessor, public IEditController {
+class PhsVst3Component : public IComponent, public IAudioProcessor, public IEditController, public INoteExpressionController {
 public:
     PhsVst3Component() = default;
     virtual ~PhsVst3Component() {
@@ -211,6 +211,11 @@ public:
         if (iidEqual(_iid, kIEditControllerIID)) {
             addRef();
             *obj = static_cast<IEditController*>(this);
+            return kResultOk;
+        }
+        if (iidEqual(_iid, kINoteExpressionControllerIID)) {
+            addRef();
+            *obj = static_cast<INoteExpressionController*>(this);
             return kResultOk;
         }
         *obj = nullptr;
@@ -296,10 +301,11 @@ public:
         if (!state) return kInvalidArgument;
         phs::PhsSynthEngine::SerializedState st{};
         int32 bytesRead = 0;
-        if (state->read(&st, sizeof(st), &bytesRead) != kResultOk || bytesRead < static_cast<int32>(sizeof(st))) {
+        // Older versions saved fewer parameters, so a shorter stream is fine: setState reads by version
+        if (state->read(&st, sizeof(st), &bytesRead) != kResultOk || bytesRead < 12) {
             return kInternalError;
         }
-        return engine_.setState(&st, sizeof(st)) ? kResultOk : kInternalError;
+        return engine_.setState(&st, static_cast<size_t>(bytesRead)) ? kResultOk : kInternalError;
     }
 
     tresult SMTG_API getState(IBStream* state) override {
@@ -335,6 +341,20 @@ public:
 
     uint32 SMTG_API getLatencySamples() override { return 0; }
 
+    // Note expression events address a note by id, so remember which key each id started
+    void rememberNoteId(int32 id, int16 pitch) {
+        if (id < 0) return;
+        noteIds_[noteIdWrite_ & 63] = {id, pitch};
+        ++noteIdWrite_;
+    }
+    int keyForNoteId(int32 id) const {
+        for (const auto& n : noteIds_) if (n.id == id) return n.key;
+        return -1;
+    }
+    struct NoteIdSlot { int32 id = -1; int key = -1; };
+    NoteIdSlot noteIds_[64]{};
+    uint32_t noteIdWrite_ = 0;
+
     tresult SMTG_API setupProcessing(ProcessSetup& setup) override {
         engine_.prepare(static_cast<float>(setup.sampleRate));
         return kResultOk;
@@ -363,6 +383,19 @@ public:
             }
         }
 
+        // Host tempo (ProcessContext: the leading fields of the VST3 struct)
+        if (data.processContext) {
+            struct ProcessContextHead {
+                uint32 state;
+                double sampleRate;
+                int64 projectTimeSamples, systemTime, continousTimeSamples;
+                double projectTimeMusic, barPositionMusic, cycleStartMusic, cycleEndMusic;
+                double tempo;
+            };
+            const auto* pc = static_cast<const ProcessContextHead*>(data.processContext);
+            if (pc->state & (1u << 10)) engine_.setTempo(static_cast<float>(pc->tempo)); // kTempoValid
+        }
+
         // 2. Apply note events
         if (data.inputEvents) {
             const int32 numEvents = data.inputEvents->getEventCount();
@@ -371,12 +404,23 @@ public:
                 if (data.inputEvents->getEvent(i, ev) == kResultOk) {
                     if (ev.type == Event::kNoteOnEvent) {
                         if (ev.noteOn.velocity > 0.0f) {
-                            engine_.noteOn(ev.noteOn.pitch, ev.noteOn.velocity);
+                            rememberNoteId(ev.noteOn.noteId, ev.noteOn.pitch);
+                            engine_.noteOn(ev.noteOn.pitch, ev.noteOn.velocity, ev.noteOn.channel);
                         } else {
-                            engine_.noteOff(ev.noteOn.pitch);
+                            engine_.noteOff(ev.noteOn.pitch, ev.noteOn.channel);
                         }
                     } else if (ev.type == Event::kNoteOffEvent) {
-                        engine_.noteOff(ev.noteOff.pitch);
+                        engine_.noteOff(ev.noteOff.pitch, ev.noteOff.channel);
+                    } else if (ev.type == Event::kNoteExpressionValueEvent) {
+                        const int key = keyForNoteId(ev.noteExpressionValue.noteId);
+                        if (key >= 0) {
+                            const double v = ev.noteExpressionValue.value; // normalised
+                            if (ev.noteExpressionValue.typeId == kTuningTypeID) engine_.setNoteTuning(key, static_cast<float>((v - 0.5) * 240.0));
+                            else if (ev.noteExpressionValue.typeId == kBrightnessTypeID) engine_.setNoteBrightness(key, static_cast<float>(v));
+                            else if (ev.noteExpressionValue.typeId == kExpressionTypeID) engine_.setNotePressure(key, static_cast<float>(v));
+                        }
+                    } else if (ev.type == Event::kPolyPressureEvent) {
+                        engine_.setNotePressure(ev.polyPressure.pitch, ev.polyPressure.pressure);
                     }
                 }
             }
@@ -393,6 +437,36 @@ public:
         }
 
         return kResultOk;
+    }
+
+    // --- INoteExpressionController: tuning (pitch), brightness (slide) and expression (pressure) ---
+    int32 SMTG_API getNoteExpressionCount(int32, int16) override { return 3; }
+
+    tresult SMTG_API getNoteExpressionInfo(int32, int16, int32 index, NoteExpressionTypeInfo& info) override {
+        if (index < 0 || index > 2) return kInvalidArgument;
+        std::memset(&info, 0, sizeof(info));
+        const uint32 ids[3] = {kTuningTypeID, kBrightnessTypeID, kExpressionTypeID};
+        const char* names[3] = {"Tuning", "Brightness", "Pressure"};
+        info.typeId = ids[index];
+        copyAsciiToUtf16(info.title, names[index], 128);
+        copyAsciiToUtf16(info.shortTitle, names[index], 128);
+        copyAsciiToUtf16(info.units, index == 0 ? "semitones" : "", 128);
+        info.valueDesc = {index == 0 ? 0.5 : 0.0, 0.0, 1.0, 0};
+        info.associatedParameterId = 0;
+        info.flags = index == 0 ? 1 : 0; // kIsBipolar
+        return kResultOk;
+    }
+
+    tresult SMTG_API getNoteExpressionStringByValue(int32, int16, uint32 id, ParamValue v, String128 string) override {
+        char buf[32];
+        if (id == kTuningTypeID) std::snprintf(buf, sizeof(buf), "%+.2f st", (v - 0.5) * 240.0);
+        else std::snprintf(buf, sizeof(buf), "%.0f%%", v * 100.0);
+        copyAsciiToUtf16(string, buf, 128);
+        return kResultOk;
+    }
+
+    tresult SMTG_API getNoteExpressionValueByString(int32, int16, uint32, const char16*, ParamValue&) override {
+        return kNotImplemented;
     }
 
     uint32 SMTG_API getTailSamples() override {
@@ -539,7 +613,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         std::snprintf(info->vendor, sizeof(info->vendor), "mtyas");
-        std::snprintf(info->version, sizeof(info->version), "0.77");
+        std::snprintf(info->version, sizeof(info->version), "0.79");
         std::snprintf(info->sdkVersion, sizeof(info->sdkVersion), "VST 3.7.8");
         return kResultOk;
     }
@@ -554,7 +628,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         copyAsciiToUtf16(info->vendor, "mtyas", 64);
-        copyAsciiToUtf16(info->version, "0.77", 64);
+        copyAsciiToUtf16(info->version, "0.79", 64);
         copyAsciiToUtf16(info->sdkVersion, "VST 3.7.8", 64);
         return kResultOk;
     }
