@@ -9,6 +9,7 @@
 
 #include "../../include/clap/clap.h"
 #include "../dsp/PhsSynthEngine.hpp"
+#include <algorithm>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -43,10 +44,31 @@ struct GuiParamEvent {
     float normValue;
 };
 
+// clap.gui host extension (the parts used here), declared with the official ABI
+struct clap_host_gui_ext {
+    void(CLAP_ABI *resize_hints_changed)(const clap_host_t *host);
+    bool(CLAP_ABI *request_resize)(const clap_host_t *host, uint32_t width, uint32_t height);
+    bool(CLAP_ABI *request_show)(const clap_host_t *host);
+    bool(CLAP_ABI *request_hide)(const clap_host_t *host);
+    void(CLAP_ABI *closed)(const clap_host_t *host, bool was_destroyed);
+};
+
 struct PhsClapPlugin {
     clap_plugin_t plugin{};
     const clap_host_t *host = nullptr;
     phs::PhsSynthEngine engine{};
+    // Editor size in pixels (follows the saved zoom, the zoom control and host resizes)
+    uint32_t editorW = 0, editorH = 0;
+
+    // The editor's zoom control asks the host to resize its window
+    bool requestEditorResize(int w, int h) {
+        const auto *gui = host && host->get_extension
+                        ? static_cast<const clap_host_gui_ext *>(host->get_extension(host, "clap.gui")) : nullptr;
+        if (!gui || !gui->request_resize || !gui->request_resize(host, static_cast<uint32_t>(w), static_cast<uint32_t>(h))) return false;
+        editorW = static_cast<uint32_t>(w);
+        editorH = static_cast<uint32_t>(h);
+        return true;
+    }
 #if defined(__APPLE__)
     NSView *editorView = nil;
 #elif defined(_WIN32)
@@ -110,7 +132,8 @@ struct PhsClapPlugin {
             case CLAP_EVENT_NOTE_OFF:
             case CLAP_EVENT_NOTE_CHOKE: {
                 const auto *ev = reinterpret_cast<const clap_event_note_t *>(hdr);
-                engine.noteOff(ev->key, ev->channel < 0 ? 0 : ev->channel);
+                engine.noteOff(ev->key, ev->channel < 0 ? 0 : ev->channel,
+                               hdr->type == CLAP_EVENT_NOTE_CHOKE ? 1.0f : static_cast<float>(ev->velocity));
                 break;
             }
             case CLAP_EVENT_NOTE_EXPRESSION: {
@@ -120,6 +143,13 @@ struct PhsClapPlugin {
                 if (ev->expression_id == CLAP_NOTE_EXPRESSION_TUNING) engine.setNoteTuning(ev->key, value);
                 else if (ev->expression_id == CLAP_NOTE_EXPRESSION_PRESSURE) engine.setNotePressure(ev->key, value);
                 else if (ev->expression_id == CLAP_NOTE_EXPRESSION_BRIGHTNESS) engine.setNoteBrightness(ev->key, value);
+                break;
+            }
+            case CLAP_EVENT_MIDI_SYSEX: {
+                // clap_event_midi_sysex: header, port_index, buffer, size
+                struct SysexEvent { clap_event_header_t header; uint16_t port_index; const uint8_t *buffer; uint32_t size; };
+                const auto *ev = reinterpret_cast<const SysexEvent *>(hdr);
+                if (ev->buffer && ev->size > 0) engine.handleSysEx(ev->buffer, ev->size);
                 break;
             }
             case CLAP_EVENT_MIDI: {
@@ -272,20 +302,29 @@ static const clap_plugin_params_t kClapParamsExt = {
 static bool CLAP_ABI stateSave(const clap_plugin_t *plugin, const clap_ostream_t *stream) {
     if (!plugin || !stream || !stream->write) return false;
     auto *self = static_cast<PhsClapPlugin *>(plugin->plugin_data);
-    phs::PhsSynthEngine::SerializedState st{};
-    self->engine.getState(st);
-    const int64_t written = stream->write(stream, &st, sizeof(st));
-    return written == static_cast<int64_t>(sizeof(st));
+    const std::vector<uint8_t> st = self->engine.saveState();
+    size_t done = 0;
+    while (done < st.size()) {
+        const int64_t written = stream->write(stream, st.data() + done, st.size() - done);
+        if (written <= 0) return false;
+        done += static_cast<size_t>(written);
+    }
+    return true;
 }
 
 static bool CLAP_ABI stateLoad(const clap_plugin_t *plugin, const clap_istream_t *stream) {
     if (!plugin || !stream || !stream->read) return false;
     auto *self = static_cast<PhsClapPlugin *>(plugin->plugin_data);
-    phs::PhsSynthEngine::SerializedState st{};
-    const int64_t bytesRead = stream->read(stream, &st, sizeof(st));
     // Older versions saved fewer parameters, so a shorter stream is fine: setState reads by version
-    if (bytesRead < 12) return false;
-    return self->engine.setState(&st, static_cast<size_t>(bytesRead));
+    std::vector<uint8_t> st;
+    uint8_t buf[4096];
+    for (;;) {
+        const int64_t n = stream->read(stream, buf, sizeof(buf));
+        if (n <= 0 || st.size() > (8u << 20)) break;
+        st.insert(st.end(), buf, buf + n);
+    }
+    if (st.size() < 12) return false;
+    return self->engine.setState(st.data(), st.size());
 }
 
 static const clap_plugin_state_t kClapStateExt = {
@@ -329,7 +368,7 @@ static bool CLAP_ABI guiCreate(const clap_plugin_t *plugin, const char *api, boo
     if (!self->editorView) {
         self->editorView = phs::createPhsEditorView(&self->engine, [self](uint32_t id, float val) {
             self->pushGuiParamChange(id, val);
-        });
+        }, [self](int w, int h) { return self->requestEditorResize(w, h); });
     }
     return self->editorView != nil;
 #else
@@ -359,29 +398,54 @@ static void CLAP_ABI guiDestroy(const clap_plugin_t *plugin) {
 
 static bool CLAP_ABI guiSetScale(const clap_plugin_t *, double) { return true; }
 
-static bool CLAP_ABI guiGetSize(const clap_plugin_t *, uint32_t *width, uint32_t *height) {
+static bool CLAP_ABI guiGetSize(const clap_plugin_t *plugin, uint32_t *width, uint32_t *height) {
     if (!width || !height) return false;
-    *width = phs::kEditorWidth;
-    *height = phs::kEditorHeight;
+    auto *self = static_cast<PhsClapPlugin *>(plugin->plugin_data);
+    if (self->editorW == 0) {
+        const float z = phs::loadEditorZoom();
+        self->editorW = static_cast<uint32_t>(phs::scaledEditorWidth(z));
+        self->editorH = static_cast<uint32_t>(phs::scaledEditorHeight(z));
+    }
+    *width = self->editorW;
+    *height = self->editorH;
     return true;
 }
 
-static bool CLAP_ABI guiCanResize(const clap_plugin_t *) { return false; }
+// Resizable at the layout's aspect ratio, from half to three times its size
+static bool CLAP_ABI guiCanResize(const clap_plugin_t *) { return true; }
 
 static bool CLAP_ABI guiGetResizeHints(const clap_plugin_t *, clap_gui_resize_hints_t *hints) {
     if (!hints) return false;
-    std::memset(hints, 0, sizeof(*hints));
+    hints->can_resize_horizontally = true;
+    hints->can_resize_vertically = true;
+    hints->preserve_aspect_ratio = true;
+    hints->aspect_ratio_width = phs::kEditorWidth;
+    hints->aspect_ratio_height = phs::kEditorHeight;
     return true;
 }
 
 static bool CLAP_ABI guiAdjustSize(const clap_plugin_t *, uint32_t *width, uint32_t *height) {
     if (!width || !height) return false;
-    *width = phs::kEditorWidth;
-    *height = phs::kEditorHeight;
+    const float z = std::clamp(std::min(*width / static_cast<float>(phs::kEditorWidth), *height / static_cast<float>(phs::kEditorHeight)), 0.5f, 3.0f);
+    *width = static_cast<uint32_t>(phs::scaledEditorWidth(z));
+    *height = static_cast<uint32_t>(phs::scaledEditorHeight(z));
     return true;
 }
 
-static bool CLAP_ABI guiSetSize(const clap_plugin_t *, uint32_t, uint32_t) { return true; }
+static bool CLAP_ABI guiSetSize(const clap_plugin_t *plugin, uint32_t width, uint32_t height) {
+    auto *self = static_cast<PhsClapPlugin *>(plugin->plugin_data);
+    guiAdjustSize(plugin, &width, &height);
+    self->editorW = width;
+    self->editorH = height;
+#if defined(__APPLE__)
+    if (self->editorView) [self->editorView setFrameSize:NSMakeSize(width, height)];
+#elif defined(_WIN32)
+    if (self->editorView) phs::setPhsWin32EditorSize(self->editorView, static_cast<int>(width), static_cast<int>(height));
+#elif defined(__linux__)
+    if (self->editorView) phs::setPhsX11EditorSize(self->editorView, static_cast<int>(width), static_cast<int>(height));
+#endif
+    return true;
+}
 
 static bool CLAP_ABI guiSetParent(const clap_plugin_t *plugin, const clap_window_t *window) {
     if (!window) return false;
@@ -402,14 +466,15 @@ static bool CLAP_ABI guiSetParent(const clap_plugin_t *plugin, const clap_window
     HWND parentHwnd = static_cast<HWND>(window->win32);
     self->editorView = phs::createPhsWin32EditorView(parentHwnd, &self->engine, [self](uint32_t id, float val) {
         self->pushGuiParamChange(id, val);
-    });
+    }, [self](int w, int h) { return self->requestEditorResize(w, h); });
     return self->editorView != nullptr;
 #elif defined(__linux__)
     if (!window->x11) return false;
     Window parentX11 = static_cast<Window>(window->x11);
+    // request_resize is thread-safe in CLAP, so the editor's own thread may ask
     self->editorView = phs::createPhsX11EditorView(parentX11, &self->engine, [self](uint32_t id, float val) {
         self->pushGuiParamChange(id, val);
-    });
+    }, [self](int w, int h) { return self->requestEditorResize(w, h); });
     return self->editorView != 0;
 #else
     return false;
@@ -538,6 +603,27 @@ static clap_process_status CLAP_ABI pluginProcess(const clap_plugin_t *plugin, c
     return CLAP_PROCESS_CONTINUE;
 }
 
+// clap.render (render.h) and clap.tail (tail.h), declared here with the official ABI
+struct clap_plugin_render_ext {
+    bool(CLAP_ABI *has_hard_realtime_requirement)(const clap_plugin_t *plugin);
+    bool(CLAP_ABI *set)(const clap_plugin_t *plugin, int32_t mode); // 0 realtime, 1 offline
+};
+struct clap_plugin_tail_ext {
+    uint32_t(CLAP_ABI *get)(const clap_plugin_t *plugin);
+};
+static bool CLAP_ABI renderHasHardRealtime(const clap_plugin_t *) { return false; }
+static bool CLAP_ABI renderSet(const clap_plugin_t *plugin, int32_t mode) {
+    static_cast<PhsClapPlugin *>(plugin->plugin_data)->engine.setOfflineRendering(mode == 1);
+    return true;
+}
+static uint32_t CLAP_ABI tailGet(const clap_plugin_t *plugin) {
+    // Long enough for the slowest reverb / echo tail; the engine goes idle on its own after it
+    const auto *self = static_cast<const PhsClapPlugin *>(plugin->plugin_data);
+    return static_cast<uint32_t>(self->engine.sampleRate() * 8.0f);
+}
+static const clap_plugin_render_ext kClapRenderExt = {renderHasHardRealtime, renderSet};
+static const clap_plugin_tail_ext kClapTailExt = {tailGet};
+
 static const void *CLAP_ABI pluginGetExtension(const clap_plugin_t *, const char *id) {
     if (!id) return nullptr;
     if (std::strcmp(id, CLAP_EXT_AUDIO_PORTS) == 0) return &kClapAudioPortsExt;
@@ -545,6 +631,8 @@ static const void *CLAP_ABI pluginGetExtension(const clap_plugin_t *, const char
     if (std::strcmp(id, CLAP_EXT_PARAMS) == 0)      return &kClapParamsExt;
     if (std::strcmp(id, CLAP_EXT_STATE) == 0)       return &kClapStateExt;
     if (std::strcmp(id, CLAP_EXT_GUI) == 0)         return &kClapGuiExt;
+    if (std::strcmp(id, "clap.render") == 0)        return &kClapRenderExt;
+    if (std::strcmp(id, "clap.tail") == 0)          return &kClapTailExt;
     return nullptr;
 }
 

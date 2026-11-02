@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/mtyas/electropiano?include_prereleases)](https://github.com/mtyas/electropiano/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-informational)
-![Formats](https://img.shields.io/badge/formats-CLAP%20%7C%20VST3%20%7C%20AU%20%7C%20Standalone-informational)
+![Formats](https://img.shields.io/badge/formats-CLAP%20%7C%20VST3%20%7C%20AU%20%7C%20LV2%20%7C%20Standalone-informational)
 
 ![electropiano](docs/images/editor_rhodes.png)
 
@@ -33,7 +33,7 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
     reed, electrostatic pickup and the 200A's amplifier simulated component by component.
 - **Swappable stages** — Resonator (tine / reed) → Pickup (magnetic / electrostatic) →
   Amp (Suitcase / 200A circuit), mixed freely.
-- **100+ controls** across seven pages, with labels and read-outs that follow the stages you
+- **100+ controls** across eight pages, with labels and read-outs that follow the stages you
   choose: hammer, tine/reed, pickup geometry, amp, envelope filter, phaser, chorus, tape echo, reverb.
 - **MPE and per-note expression** — per-note pitch bend (tines and reeds, even while they ring),
   pressure and slide; CLAP note expressions.
@@ -43,11 +43,19 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 - **A mastering section** — four-band parametric EQ with an interactive curve and live spectrum,
   a full compressor and output limiter, nine miked cabinets with mic position, distance and room,
   spring or hall reverb, tempo-synced tremolo / phaser / echo, oversampled preamp.
+- **Played like the real thing** — repeated notes strike the still-ringing tine, half-pedalling,
+  sostenuto, soft pedal and release velocity, sympathetic resonance with the pedal down, and a
+  **Condition** control that gives every key its own small imperfections.
+- **Microtuning** — Scala `.scl` / `.kbm` files, built-in historical temperaments and EDOs, MIDI
+  Tuning Standard; saved with the project. Master tune, transpose, 8 – 64 voices.
+- **Studio hall and plate reverbs** with pre-delay, a tri-chorus, keyboard stereo spread.
 - **A scope that shows the physics** — the tine and hammer, the pickup field, the amp saturating.
 - **28 factory presets**, including OpenWurli's calibrated 200A and cross-instrument hybrids.
-- **One editor on every platform**, MIDI learn, undo/redo, user presets, a playable keyboard.
-- **CLAP and VST3** on macOS, Windows and Linux, plus **Audio Unit** and a **standalone app**
-  on macOS.
+- **One resizable editor on every platform** (75 – 200 %), MIDI learn, undo/redo, A/B compare,
+  a searchable preset browser with favourites, a CPU meter and a playable keyboard.
+- **CLAP, VST3 and LV2** on macOS, Windows and Linux, plus **Audio Unit** and a **standalone app**
+  on macOS. Notes and automation are sample-accurate in every format; an idle instance uses
+  next to no CPU.
 
 <table>
 <tr>
@@ -60,7 +68,7 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 </tr>
 </table>
 
-## One window, seven pages
+## One window, eight pages
 
 <table>
 <tr>
@@ -101,31 +109,33 @@ Grab the archive for your system from
 
 | System | Copy | To |
 |---|---|---|
-| macOS (Universal) | `electropiano.clap` / `.vst3` / `.component` | `~/Library/Audio/Plug-Ins/CLAP` / `VST3` / `Components` |
-| Windows (x64) | `electropiano.clap` / `electropiano.vst3` | `C:\Program Files\Common Files\CLAP` / `VST3` |
-| Linux (x64) | `electropiano.clap` / `electropiano.vst3` | `~/.clap` / `~/.vst3` |
+| macOS (Universal) | `electropiano.clap` / `.vst3` / `.component` / `.lv2` | `~/Library/Audio/Plug-Ins/CLAP` / `VST3` / `Components` / `LV2` |
+| Windows (x64) | `electropiano.clap` / `electropiano.vst3` / `electropiano.lv2` | `C:\Program Files\Common Files\CLAP` / `VST3`, `%APPDATA%\LV2` |
+| Linux (x64) | `electropiano.clap` / `electropiano.vst3` / `electropiano.lv2` | `~/.clap` / `~/.vst3` / `~/.lv2` |
 
 The macOS builds aren't notarised: if macOS blocks them, see
 [Installing](docs/MANUAL.md#1-installing).
 
 ## Build from source
 
-**macOS** (Xcode command-line tools):
-
-```bash
-make all                                      # CLAP, VST3, AU, standalone app, tests
-make test                                     # passivity, OpenWurli port and plugin-load tests
-make all ARCHFLAGS="-arch arm64 -arch x86_64" # universal binaries
-```
-
-**Windows** (Visual Studio 2022) and **Linux** (`libx11-dev`):
+CMake builds everything on every platform (macOS: Xcode command-line tools and CMake;
+Windows: Visual Studio 2022; Linux: `libx11-dev`):
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
+On macOS the `Makefile` wraps the same build:
+
+```bash
+make                          # every format and the tests
+make test                     # energy conservation, OpenWurli port, plugin-load and playing tests
+make ARCHS="arm64;x86_64"     # universal binaries
+make bench                    # CPU per preset; --save / --compare DIR to check a change's sound
+```
+
+No external SDKs are needed: the CLAP, VST3 and LV2 interfaces are in `include/`.
 
 ### Layout
 
@@ -134,7 +144,7 @@ No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
 | `src/dsp/` | Engine, Rhodes voice (`PhsVoice.hpp`), effects, cabinets (`PhsCabinet.hpp`), parameters, presets |
 | `src/dsp/wurli/` | Wurlitzer 200A model (OpenWurli port) |
 | `src/gui/` | Shared editor (`PhsEditor`), CoreGraphics / Win32 / X11 hosts, software renderer |
-| `src/formats/` | CLAP, VST3, AU and standalone wrappers |
+| `src/formats/` | CLAP, VST3, AU, LV2 and standalone wrappers |
 | `tools/` | Tests, screenshot and font-atlas generators |
 
 ## Verification
@@ -153,7 +163,12 @@ No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
 - **The curves you see are the audio you hear:** the EQ and cabinet responses drawn in the editor are
   checked against measured sine sweeps through the real processing; the compressor's slope against
   its ratio.
-- That the CLAP, VST3 and AU builds load and render, and that older saved states still load.
+- **Playing:** a restruck tine keeps ringing, voice steals don't click, half-pedalling sits between
+  pedal up and down, sostenuto holds only its notes, master tune / transpose / Scala / MIDI Tuning
+  Standard land within a few cents of the target.
+- That the CLAP, VST3, AU and LV2 builds load and render, place notes at the exact sample, and
+  that older saved states still load. Pull requests are also checked for unintended sound changes
+  (`tools/bench_engine.cpp`).
 
 ## Credits
 

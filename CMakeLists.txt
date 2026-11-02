@@ -57,6 +57,7 @@ elseif(WIN32)
         user32
         shell32
         winmm
+        comdlg32
     )
 else() # Linux
     find_package(X11 REQUIRED)
@@ -84,6 +85,28 @@ if(NOT APPLE)
 endif()
 
 # ==============================================================================
+# macOS bundles: Info.plist from one template, the GUI images as resources, PkgInfo and an
+# ad-hoc signature (release signing replaces it)
+# ==============================================================================
+# Audio Unit component version: major << 16 | minor << 8 | patch
+math(EXPR PHS_AU_VERSION "(${PROJECT_VERSION_MAJOR} << 16) | (${PROJECT_VERSION_MINOR} << 8) | 0")
+file(GLOB PHS_GUI_RESOURCES ${CMAKE_SOURCE_DIR}/resources/gui/*.png)
+
+function(phs_macos_bundle target bundle_id package_type extra_plist)
+    set(PHS_BUNDLE_ID ${bundle_id})
+    set(PHS_PACKAGE_TYPE ${package_type})
+    set(PHS_EXTRA_PLIST "${extra_plist}")
+    configure_file(${CMAKE_SOURCE_DIR}/resources/macos/Bundle-Info.plist.in ${CMAKE_BINARY_DIR}/plist/${target}-Info.plist @ONLY)
+    set_target_properties(${target} PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_BINARY_DIR}/plist/${target}-Info.plist)
+    target_sources(${target} PRIVATE ${PHS_GUI_RESOURCES})
+    set_source_files_properties(${PHS_GUI_RESOURCES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND /bin/sh -c "printf '${package_type}????' > \"$<TARGET_BUNDLE_CONTENT_DIR:${target}>/PkgInfo\""
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:${target}>" || true
+        VERBATIM)
+endfunction()
+
+# ==============================================================================
 # 1. CLAP Plugin Target
 # ==============================================================================
 add_library(electropiano_CLAP MODULE
@@ -102,12 +125,8 @@ set_target_properties(electropiano_CLAP PROPERTIES ARCHIVE_OUTPUT_NAME "electrop
 target_link_libraries(electropiano_CLAP PRIVATE ${PLATFORM_LIBS})
 
 if(APPLE)
-    set_target_properties(electropiano_CLAP PROPERTIES
-        BUNDLE TRUE
-        BUNDLE_EXTENSION "clap"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.clap"
-        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
-    )
+    set_target_properties(electropiano_CLAP PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION "clap")
+    phs_macos_bundle(electropiano_CLAP "com.mtyas.electropiano.clap" "BNDL" "")
 endif()
 
 # ==============================================================================
@@ -128,12 +147,8 @@ set_target_properties(electropiano_VST3 PROPERTIES ARCHIVE_OUTPUT_NAME "electrop
 target_link_libraries(electropiano_VST3 PRIVATE ${PLATFORM_LIBS})
 
 if(APPLE)
-    set_target_properties(electropiano_VST3 PROPERTIES
-        BUNDLE TRUE
-        BUNDLE_EXTENSION "vst3"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.vst3"
-        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
-    )
+    set_target_properties(electropiano_VST3 PROPERTIES BUNDLE TRUE BUNDLE_EXTENSION "vst3")
+    phs_macos_bundle(electropiano_VST3 "com.mtyas.electropiano.vst3" "BNDL" "")
 endif()
 
 # ==============================================================================
@@ -150,11 +165,24 @@ if(APPLE)
         PREFIX ""
         BUNDLE TRUE
         BUNDLE_EXTENSION "component"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.audiounit"
-        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
     )
     target_compile_definitions(electropiano_AU PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_AU)
     target_link_libraries(electropiano_AU PRIVATE ${PLATFORM_LIBS})
+    phs_macos_bundle(electropiano_AU "com.mtyas.electropiano.audiounit" "BNDL"
+"  <key>AudioComponents</key>
+  <array>
+    <dict>
+      <key>name</key><string>mtyas: electropiano</string>
+      <key>description</key><string>electropiano by mtyas - Port-Hamiltonian Rhodes &amp; Wurlitzer</string>
+      <key>factoryFunction</key><string>PhsElectricPianoAUFactory</string>
+      <key>manufacturer</key><string>mtya</string>
+      <key>subtype</key><string>ePno</string>
+      <key>type</key><string>aumu</string>
+      <key>version</key><integer>${PHS_AU_VERSION}</integer>
+      <key>sandboxSafe</key><true/>
+    </dict>
+  </array>
+")
 endif()
 
 # ==============================================================================
@@ -166,14 +194,49 @@ if(APPLE)
         ${GUI_SOURCES}
         ${DSP_HEADERS}
     )
-    set_target_properties(electropiano_App PROPERTIES
-        OUTPUT_NAME "electropiano"
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mtyas.electropiano.standalone"
-        MACOSX_BUNDLE_BUNDLE_NAME "electropiano"
-    )
+    set_target_properties(electropiano_App PROPERTIES OUTPUT_NAME "electropiano")
     target_compile_definitions(electropiano_App PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_Standalone)
     target_link_libraries(electropiano_App PRIVATE ${PLATFORM_LIBS})
+    phs_macos_bundle(electropiano_App "com.mtyas.electropiano.standalone" "APPL" "")
 endif()
+
+# ==============================================================================
+# 4b. LV2 bundle: plugin and UI in one binary, metadata generated from the parameter table
+# ==============================================================================
+add_executable(gen_lv2_ttl tools/gen_lv2_ttl.cpp)
+add_library(electropiano_LV2 MODULE
+    src/formats/lv2_entry.cpp
+    ${GUI_SOURCES}
+    ${DSP_HEADERS}
+)
+set(PHS_LV2_DIR ${CMAKE_BINARY_DIR}/electropiano.lv2)
+set_target_properties(electropiano_LV2 PROPERTIES
+    OUTPUT_NAME "electropiano"
+    PREFIX ""
+    ARCHIVE_OUTPUT_NAME "electropiano_lv2"
+    LIBRARY_OUTPUT_DIRECTORY ${PHS_LV2_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${PHS_LV2_DIR}
+)
+foreach(cfg Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER ${cfg} CFG)
+    set_target_properties(electropiano_LV2 PROPERTIES LIBRARY_OUTPUT_DIRECTORY_${CFG} ${PHS_LV2_DIR} RUNTIME_OUTPUT_DIRECTORY_${CFG} ${PHS_LV2_DIR})
+endforeach()
+target_compile_definitions(electropiano_LV2 PRIVATE PHS_VIEW_CLASS_NAME=PhsEditorView_LV2)
+target_link_libraries(electropiano_LV2 PRIVATE ${PLATFORM_LIBS})
+if(APPLE)
+    # The UI calls the Cocoa view, so this file must be Objective-C++ like the views
+    set_source_files_properties(src/formats/lv2_entry.cpp PROPERTIES LANGUAGE OBJCXX)
+    set_target_properties(electropiano_LV2 PROPERTIES SUFFIX ".dylib")
+    set(PHS_LV2_UI CocoaUI)
+elseif(WIN32)
+    set(PHS_LV2_UI WindowsUI)
+else()
+    set(PHS_LV2_UI X11UI)
+endif()
+add_dependencies(electropiano_LV2 gen_lv2_ttl)
+add_custom_command(TARGET electropiano_LV2 POST_BUILD
+    COMMAND $<TARGET_FILE:gen_lv2_ttl> ${PHS_LV2_DIR} $<TARGET_FILE_NAME:electropiano_LV2> ${PHS_LV2_UI}
+    VERBATIM)
 
 # ==============================================================================
 # 5. Automated Test & Passivity Suite
@@ -189,6 +252,9 @@ endif()
 
 # OpenWurli port verification (SPICE-derived acceptance targets)
 add_executable(test_wurli_port tools/test_wurli_port.cpp ${DSP_HEADERS})
+
+# CPU benchmark and output-regression check (not a test: timings depend on the machine)
+add_executable(bench_engine tools/bench_engine.cpp ${DSP_HEADERS})
 
 enable_testing()
 add_test(NAME PassivityAndSpectralAnalysis COMMAND test_phs_piano)

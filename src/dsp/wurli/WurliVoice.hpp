@@ -301,15 +301,21 @@ inline double pickupRmsProxyLaw(int midi, double swingMm, double f0, double fc) 
     const double a = pickupBandSign(midi) * swingMm;
     const double rest = evalLaw(law, -kPickupRestOffsetMm);
     constexpr int N = 64;
+    // Twiddle factors, shared by every note-on (this runs on the audio thread)
+    struct Twiddles {
+        double c[N], s[N];
+        Twiddles() { for (int k = 0; k < N; ++k) { c[k] = std::cos(kTau * k / N); s[k] = std::sin(kTau * k / N); } }
+    };
+    static const Twiddles tw;
     double s[N];
-    for (int i = 0; i < N; ++i) s[i] = evalLaw(law, a * std::sin(kTau * i / N) - kPickupRestOffsetMm) - rest;
+    for (int i = 0; i < N; ++i) s[i] = evalLaw(law, a * tw.s[i] - kPickupRestOffsetMm) - rest;
     double sumSq = 0.0;
     for (int n = 1; n <= 8; ++n) {
         double re = 0.0, im = 0.0;
         for (int i = 0; i < N; ++i) {
-            const double p = kTau * (n * i) / N;
-            re += s[i] * std::cos(p);
-            im -= s[i] * std::sin(p);
+            const int k = (n * i) & (N - 1);
+            re += s[i] * tw.c[k];
+            im -= s[i] * tw.s[k];
         }
         const double cn = 2.0 * std::sqrt(re * re + im * im) / N;
         const double nf = n * f0;
@@ -528,14 +534,15 @@ public:
         return sum;
     }
 
-    bool isSilent(double thresholdDb) const {
-        const double thr = std::pow(10.0, thresholdDb / 20.0);
+    // thr: linear amplitude threshold
+    bool isSilent(double thr) const {
         for (const auto& m : modes_) {
             if (std::fabs(m.amplitude * m.envelope) > thr) return false;
         }
         return true;
     }
     bool isDamping() const { return damperActive_; }
+    void liftDamper() { damperActive_ = false; }
     double releaseSeconds(double fs) const { return damperActive_ ? damperReleaseCount_ / fs : 0.0; }
     double fundamentalEnvelope() const { return modes_[0].amplitude * modes_[0].envelope; }
 
@@ -650,6 +657,11 @@ public:
     }
 
     void noteOff() { reed_.startDamper(tableMidi_, fs_, damperScale_); }
+    // scale 0 lifts the damper off the reed again; otherwise multiplies the felt's damping rate
+    void setDamper(double scale) {
+        if (scale <= 0.0) reed_.liftDamper();
+        else reed_.startDamper(tableMidi_, fs_, damperScale_ * scale);
+    }
     void setPitchScale(double scale) { reed_.setPitchScale(scale); }
 
     // Reed displacement plus the attack-noise burst (which upstream also feeds the pickup)
@@ -657,7 +669,7 @@ public:
 
     bool isSilent() const {
         if (reed_.isDamping() && reed_.releaseSeconds(fs_) > 10.0) return true;
-        return reed_.isSilent(-80.0);
+        return reed_.isSilent(1e-4); // -80 dB
     }
     double fundamentalHz() const { return f0_; }
     double swingMm() const { return swingMm_; }

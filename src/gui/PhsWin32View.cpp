@@ -5,6 +5,8 @@
 #include "PhsSoftwareCanvas.hpp"
 #include <windowsx.h>
 #include <shellapi.h>
+#include <commdlg.h>
+#include <algorithm>
 #include <memory>
 
 namespace {
@@ -12,6 +14,9 @@ namespace {
 struct Win32Editor {
     std::unique_ptr<phs::gui::Editor> editor;
     phs::gui::SoftwareCanvas canvas;
+    float zoom = 1.0f;
+    phs::Win32ResizeRequest requestResize;
+    HWND hwnd = nullptr;
 };
 
 const wchar_t* kClassName = L"electropianoEditor";
@@ -23,7 +28,16 @@ HINSTANCE moduleInstance() {
     return m;
 }
 
-float logicalY(LPARAM lp) { return static_cast<float>(phs::kEditorHeight - GET_Y_LPARAM(lp)); }
+// Window pixels to the editor's logical coordinates (origin bottom-left)
+float logicalX(const Win32Editor* e, int px) { return static_cast<float>(px) / e->zoom; }
+float logicalY(const Win32Editor* e, int py) { return static_cast<float>(phs::kEditorHeight) - static_cast<float>(py) / e->zoom; }
+float logicalX(const Win32Editor* e, LPARAM lp) { return logicalX(e, GET_X_LPARAM(lp)); }
+float logicalY(const Win32Editor* e, LPARAM lp) { return logicalY(e, GET_Y_LPARAM(lp)); }
+
+void setZoomFromSize(Win32Editor* e, int w, int h) {
+    e->zoom = std::max(0.25f, std::min(w / static_cast<float>(phs::kEditorWidth), h / static_cast<float>(phs::kEditorHeight)));
+    if (e->editor) e->editor->setZoom(e->zoom);
+}
 
 LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* self = reinterpret_cast<Win32Editor*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -39,13 +53,23 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_ERASEBKGND:
             return 1;
+        case WM_SIZE:
+            if (self) {
+                setZoomFromSize(self, LOWORD(lp), HIWORD(lp));
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             if (self) {
                 auto& c = self->canvas;
-                if (c.width() != phs::kEditorWidth || c.height() != phs::kEditorHeight) c.resize(phs::kEditorWidth, phs::kEditorHeight);
-                self->editor->draw(c);
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                const int w = std::max(1, static_cast<int>(rc.right - rc.left)), h = std::max(1, static_cast<int>(rc.bottom - rc.top));
+                if (c.width() != w || c.height() != h) c.resize(w, h);
+                phs::gui::ScaledCanvas scaled(c, self->zoom);
+                self->editor->draw(scaled);
                 BITMAPINFO bmi{};
                 bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
                 bmi.bmiHeader.biWidth = c.width();
@@ -63,27 +87,27 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (self) {
                 SetFocus(hwnd);
                 SetCapture(hwnd);
-                self->editor->mouseDown(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp), (wp & MK_SHIFT) != 0,
+                self->editor->mouseDown(logicalX(self, lp), logicalY(self, lp), (wp & MK_SHIFT) != 0,
                                         GetMessageTime() / 1000.0);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         case WM_MOUSEMOVE:
             if (self && (wp & MK_LBUTTON)) {
-                self->editor->mouseDrag(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                self->editor->mouseDrag(logicalX(self, lp), logicalY(self, lp));
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         case WM_LBUTTONUP:
             if (self) {
                 ReleaseCapture();
-                self->editor->mouseUp(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                self->editor->mouseUp(logicalX(self, lp), logicalY(self, lp));
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
         case WM_RBUTTONDOWN:
             if (self) {
-                self->editor->rightMouseDown(static_cast<float>(GET_X_LPARAM(lp)), logicalY(lp));
+                self->editor->rightMouseDown(logicalX(self, lp), logicalY(self, lp));
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
@@ -91,7 +115,7 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (self) {
                 POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
                 ScreenToClient(hwnd, &pt);
-                self->editor->scroll(static_cast<float>(pt.x), static_cast<float>(phs::kEditorHeight - pt.y),
+                self->editor->scroll(logicalX(self, static_cast<int>(pt.x)), logicalY(self, static_cast<int>(pt.y)),
                                      GET_WHEEL_DELTA_WPARAM(wp) / static_cast<float>(WHEEL_DELTA));
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -130,7 +154,8 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 namespace phs {
 
-HWND createPhsWin32EditorView(HWND parent, PhsSynthEngine* engine, ParamChangeCallback onParamChange) {
+HWND createPhsWin32EditorView(HWND parent, PhsSynthEngine* engine, ParamChangeCallback onParamChange,
+                              Win32ResizeRequest requestResize) {
     const HINSTANCE inst = moduleInstance();
     WNDCLASSEXW wc{};
     if (!GetClassInfoExW(inst, kClassName, &wc)) {
@@ -143,15 +168,43 @@ HWND createPhsWin32EditorView(HWND parent, PhsSynthEngine* engine, ParamChangeCa
         RegisterClassExW(&wc);
     }
     auto* self = new Win32Editor();
+    self->zoom = loadEditorZoom();
+    self->requestResize = std::move(requestResize);
     gui::EditorHost host;
     host.paramChanged = std::move(onParamChange);
     host.openUrl = [](const std::string& url) { ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); };
+    host.requestZoom = [self](float z) {
+        const int w = scaledEditorWidth(z), h = scaledEditorHeight(z);
+        if (self->requestResize && !self->requestResize(w, h)) return;
+        if (self->hwnd) SetWindowPos(self->hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    };
+    host.chooseTuningFile = [self]() -> std::string {
+        wchar_t file[MAX_PATH] = L"";
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = self->hwnd;
+        ofn.lpstrFilter = L"Scala tuning (*.scl)\0*.scl\0All files\0*.*\0";
+        ofn.lpstrFile = file;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!GetOpenFileNameW(&ofn)) return {};
+        char utf8[MAX_PATH * 4];
+        const int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, utf8, sizeof(utf8), nullptr, nullptr);
+        return n > 0 ? std::string(utf8) : std::string();
+    };
     self->editor = std::make_unique<gui::Editor>(engine, std::move(host));
-    self->canvas.resize(kEditorWidth, kEditorHeight);
+    self->editor->setZoom(self->zoom);
+    const int w = scaledEditorWidth(self->zoom), h = scaledEditorHeight(self->zoom);
+    self->canvas.resize(w, h);
     HWND hwnd = CreateWindowExW(0, kClassName, L"electropiano", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0,
-                                kEditorWidth, kEditorHeight, parent, nullptr, inst, self);
+                                w, h, parent, nullptr, inst, self);
     if (!hwnd) delete self;
+    else self->hwnd = hwnd;
     return hwnd;
+}
+
+void setPhsWin32EditorSize(HWND hwnd, int width, int height) {
+    if (hwnd) SetWindowPos(hwnd, nullptr, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void destroyPhsWin32EditorView(HWND hwnd) {

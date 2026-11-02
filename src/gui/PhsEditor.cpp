@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <complex>
+#include <fstream>
 #include <vector>
 
 namespace phs::gui {
@@ -297,6 +298,8 @@ const char* Editor::knobLabel(uint32_t id, const Stages& c) const {
         case kParamDelayTime: return "Time";
         case kParamDelayFeedback: return "Repeats";
         case kParamReverbDecay: return "Decay";
+        case kParamReverbPreDelay: return "Pre-Delay";
+        case kParamMasterTune: return "Tune";
         default: return kParamMetadata[id].name;
     }
 }
@@ -691,25 +694,52 @@ std::vector<int> Editor::visiblePresets() const {
     std::vector<int> out;
     if (!engine_) return out;
     const auto& presets = engine_->getPresetManager().getPresets();
+    auto lower = [](std::string t) {
+        for (auto& ch : t) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return t;
+    };
+    const std::string needle = lower(search_);
     for (size_t i = 0; i < presets.size(); ++i) {
-        if (category_ == PresetCategory::All || presets[i].category == category_) out.push_back(static_cast<int>(i));
+        const auto& p = presets[i];
+        if (favoritesOnly_ ? !p.isFavorite : !(category_ == PresetCategory::All || p.category == category_)) continue;
+        if (!needle.empty() && lower(p.name + " " + p.description + " " + p.author).find(needle) == std::string::npos) continue;
+        out.push_back(static_cast<int>(i));
     }
     return out;
 }
 
-Rect Editor::presetListRect() const { return {browserRect_.x + 20.0f, browserRect_.y + 56.0f, browserRect_.w - 40.0f, 290.0f}; }
+Rect Editor::presetListRect() const { return {browserRect_.x + 20.0f, browserRect_.y + 92.0f, browserRect_.w - 40.0f, 254.0f}; }
 
 void Editor::drawPresetBrowser(Canvas& c) {
     browserRect_ = modalFrame(c, 600.0f, 440.0f, "Presets", browserClose_);
     const Rect& m = browserRect_;
 
-    const char* cats[6] = {"All", "Rhodes", "Wurlitzer", "Dyno/Bells", "Hybrid/Fx", "User"};
+    // Search: typing while the browser is open filters by name, description and author
+    searchRect_ = {m.x + 160.0f, m.maxY() - 40.0f, 340.0f, 26.0f};
+    c.fillRoundRect(searchRect_, 6.0f, kInsetBg);
+    c.strokeRoundRect(searchRect_, 6.0f, search_.empty() ? kPanelBorder : kAccent, 1.0f);
+    {
+        const float sx = searchRect_.x + 14.0f, sy = searchRect_.midY() + 1.0f;
+        c.strokeCircle(sx, sy, 4.5f, kTextDim, 1.4f);
+        c.strokeLine(sx + 3.2f, sy - 3.2f, sx + 6.5f, sy - 6.5f, kTextDim, 1.4f);
+        const float th = c.lineHeight(kListItem);
+        const float ty = std::round(searchRect_.y + (searchRect_.h - th) * 0.5f);
+        if (search_.empty()) {
+            c.drawText("Type to search", searchRect_.x + 28.0f, ty, kListItem, kTextDim);
+        } else {
+            const std::string shown = ellipsize(c, search_, searchRect_.w - 40.0f, kListItem);
+            c.drawText(shown, searchRect_.x + 28.0f, ty, kListItem, kTextPrimary);
+            c.fillRect({searchRect_.x + 29.0f + c.textWidth(shown, kListItem), searchRect_.y + 6.0f, 1.5f, searchRect_.h - 12.0f}, kAccent);
+        }
+    }
+
+    const char* cats[7] = {"All", "Rhodes", "Wurlitzer", "Dyno/Bells", "Hybrid/Fx", "User", "Favourites"};
     const Rect tabs{m.x + 20.0f, m.maxY() - 86.0f, 560.0f, 28.0f};
     c.fillRoundRect(tabs, 6.0f, kInsetBg);
-    const float tw = tabs.w / 6.0f;
-    for (int i = 0; i < 6; ++i) {
+    const float tw = tabs.w / 7.0f;
+    for (int i = 0; i < 7; ++i) {
         tabRects_[i] = {tabs.x + i * tw, tabs.y, tw, tabs.h};
-        const bool on = static_cast<int>(category_) == i;
+        const bool on = i == 6 ? favoritesOnly_ : (!favoritesOnly_ && static_cast<int>(category_) == i);
         if (on) c.fillRoundRect(tabRects_[i].inset(3.0f, 3.0f), 4.0f, kAccent);
         drawCentered(c, cats[i], tabRects_[i], on ? kSegmentOn : kSegment, on ? kHeaderBg : kTextMuted);
     }
@@ -732,7 +762,20 @@ void Editor::drawPresetBrowser(Canvas& c) {
             if (current || selected) {
                 c.fillRoundRect({list.x + 4.0f, rowY - 2.0f, list.w - 18.0f, 22.0f}, 4.0f, kAccent.withAlpha(current ? 0.16f : 0.08f));
             }
-            c.drawText(presets[p].name, list.x + 14.0f, rowY + 2.0f, current ? kListItemOn : kListItem, current ? kAccent : kTextPrimary);
+            // Favourite star (click it to toggle)
+            {
+                const float cx = list.x + 16.0f, cy = rowY + 8.0f, ro = 5.5f, ri = 2.4f;
+                float px = 0, py = 0;
+                const Color sc = presets[p].isFavorite ? kAccent : kTextDim.withAlpha(0.6f);
+                for (int v = 0; v <= 10; ++v) {
+                    const float a = 1.5707963f + v * 0.6283185f, rr = (v & 1) ? ri : ro;
+                    const float x = cx + rr * std::cos(a), y = cy + rr * std::sin(a);
+                    if (v > 0) c.strokeLine(px, py, x, y, sc, presets[p].isFavorite ? 1.6f : 1.0f);
+                    px = x; py = y;
+                }
+                if (presets[p].isFavorite) c.fillCircle(cx, cy, 2.2f, kAccent);
+            }
+            c.drawText(presets[p].name, list.x + 32.0f, rowY + 2.0f, current ? kListItemOn : kListItem, current ? kAccent : kTextPrimary);
             if (presets[p].isUserPreset) {
                 const float w = c.textWidth("USER", kCcTag);
                 c.drawText("USER", list.maxX() - 24.0f - w, rowY + 4.0f, kCcTag, kTextDim);
@@ -749,13 +792,29 @@ void Editor::drawPresetBrowser(Canvas& c) {
         }
     }
 
+    // The selected (or loaded) preset's description
+    if (engine_) {
+        const int shownIdx = selectedPreset_ >= 0 ? selectedPreset_ : engine_->getCurrentPreset();
+        if (const auto* p = engine_->getPresetManager().getPreset(shownIdx)) {
+            float dy = list.y - 16.0f;
+            int lines = 0;
+            for (const auto& line : wrap(c, p->description.empty() ? p->name : p->description, m.w - 40.0f, kLinkSub)) {
+                if (++lines > 2) break;
+                c.drawText(line, m.x + 20.0f, dy, kLinkSub, kTextMuted);
+                dy -= c.lineHeight(kLinkSub) + 1.0f;
+            }
+        }
+    }
+
     browserSave_ = {m.x + 20.0f, m.y + 16.0f, 120.0f, 28.0f};
     browserDelete_ = {m.x + 148.0f, m.y + 16.0f, 120.0f, 28.0f};
     const bool canDelete = engine_ && selectedPreset_ >= 0 && engine_->getPresetManager().getPreset(selectedPreset_) &&
                            engine_->getPresetManager().getPreset(selectedPreset_)->isUserPreset;
     modalButton(c, browserSave_, "Save Preset\xE2\x80\xA6", true);
     modalButton(c, browserDelete_, "Delete", false, canDelete);
-    c.drawText("Scroll for more \xC2\xB7 click to load", m.x + 290.0f, m.y + 24.0f, kLinkSub, kTextDim);
+    char count[64];
+    std::snprintf(count, sizeof(count), "%d presets \xC2\xB7 click to load \xC2\xB7 star to favourite", static_cast<int>(items.size()));
+    c.drawText(count, m.x + 290.0f, m.y + 24.0f, kLinkSub, kTextDim);
 }
 
 void Editor::drawSaveDialog(Canvas& c) {
@@ -867,8 +926,12 @@ void Editor::mouseDown(float x, float y, bool fine, double timeSec) {
 
     if (browserOpen_) {
         if (browserClose_.contains(x, y) || !browserRect_.contains(x, y)) { browserOpen_ = false; return; }
-        for (int i = 0; i < 6; ++i) {
-            if (tabRects_[i].contains(x, y)) { category_ = static_cast<PresetCategory>(i); listScroll_ = 0; return; }
+        for (int i = 0; i < 7; ++i) {
+            if (!tabRects_[i].contains(x, y)) continue;
+            favoritesOnly_ = i == 6;
+            if (i < 6) category_ = static_cast<PresetCategory>(i);
+            listScroll_ = 0;
+            return;
         }
         if (browserSave_.contains(x, y)) { saveOpen_ = true; saveName_ = "My Piano"; return; }
         if (browserDelete_.contains(x, y)) {
@@ -883,6 +946,11 @@ void Editor::mouseDown(float x, float y, bool fine, double timeSec) {
             const std::vector<int> items = visiblePresets();
             const int row = static_cast<int>((list.maxY() - 4.0f - y) / 24.0f);
             const int k = listScroll_ + row;
+            if (row >= 0 && k < static_cast<int>(items.size()) && x < list.x + 28.0f) {
+                const auto* fav = engine_->getPresetManager().getPreset(items[k]);
+                if (fav) engine_->getPresetManager().setFavorite(items[k], !fav->isFavorite);
+                return;
+            }
             if (row >= 0 && k < static_cast<int>(items.size())) {
                 const auto* p = engine_->getPresetManager().getPreset(items[k]);
                 selectedPreset_ = items[k];
@@ -934,8 +1002,13 @@ void Editor::mouseDown(float x, float y, bool fine, double timeSec) {
     if (presetBox_.contains(x, y)) { browserOpen_ = true; selectedPreset_ = -1; return; }
     if (aboutBtn_.contains(x, y)) { aboutOpen_ = true; return; }
     for (int i = 0; i < kNumPages; ++i) {
-        if (pageTabs_[i].contains(x, y)) { page_ = i; return; }
+        if (pageTabs_[i].contains(x, y)) {
+            page_ = i;
+            if (i == 7) refreshTunings();
+            return;
+        }
     }
+    if (page_ == 7 && mouseDownPlay(x, y)) return;
 
     if (pedal_.contains(x, y)) {
         sendMidi(0xB0, 64, (engine_ && engine_->isSustainActive()) ? 0 : 127);
@@ -1085,18 +1158,21 @@ void Editor::scroll(float x, float y, float deltaLines) {
 }
 
 bool Editor::keyChar(uint32_t cp) {
-    if (!saveOpen_ || cp < 32 || cp == 127) return false;
-    if (saveName_.size() >= 48) return true;
+    // Typing goes to the save dialog's name, or to the preset browser's search
+    std::string* target = saveOpen_ ? &saveName_ : (browserOpen_ ? &search_ : nullptr);
+    if (!target || cp < 32 || cp == 127) return false;
+    if (target->size() >= 48) return true;
     if (cp < 0x80) {
-        saveName_ += static_cast<char>(cp);
+        *target += static_cast<char>(cp);
     } else if (cp < 0x800) {
-        saveName_ += static_cast<char>(0xC0 | (cp >> 6));
-        saveName_ += static_cast<char>(0x80 | (cp & 0x3F));
+        *target += static_cast<char>(0xC0 | (cp >> 6));
+        *target += static_cast<char>(0x80 | (cp & 0x3F));
     } else {
-        saveName_ += static_cast<char>(0xE0 | (cp >> 12));
-        saveName_ += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-        saveName_ += static_cast<char>(0x80 | (cp & 0x3F));
+        *target += static_cast<char>(0xE0 | (cp >> 12));
+        *target += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        *target += static_cast<char>(0x80 | (cp & 0x3F));
     }
+    if (!saveOpen_) listScroll_ = 0;
     forceRedraw_ = true;
     return true;
 }
@@ -1118,6 +1194,26 @@ bool Editor::keyAction(Key k) {
             category_ = PresetCategory::User;
             listScroll_ = 0;
             return true;
+        }
+        return true;
+    }
+    if (browserOpen_ && !search_.empty() && (k == Key::Escape || k == Key::Backspace)) {
+        // Escape clears the search first; Backspace edits it
+        if (k == Key::Escape) search_.clear();
+        else {
+            while (!search_.empty() && (static_cast<unsigned char>(search_.back()) & 0xC0) == 0x80) search_.pop_back();
+            if (!search_.empty()) search_.pop_back();
+        }
+        listScroll_ = 0;
+        return true;
+    }
+    if (k == Key::Enter && browserOpen_ && engine_) {
+        // Enter loads the first match
+        const auto items = visiblePresets();
+        if (!items.empty()) {
+            engine_->loadPreset(items[0]);
+            for (uint32_t i = 0; i < kNumParams; ++i) if (host_.paramChanged) host_.paramChanged(i, engine_->getParamNormalized(i));
+            browserOpen_ = false;
         }
         return true;
     }
@@ -1155,6 +1251,13 @@ uint64_t Editor::stateHash() const {
         mixIn(static_cast<uint64_t>(sc.meterR * 400.0f));
         mixIn(static_cast<uint64_t>(-sc.gainReductionDb * 4.0f));
         if (page_ == 6 || page_ == 4) mixIn(sc.writePos);
+        mixIn(static_cast<uint64_t>(sc.cpuLoad * 100.0f));
+        mixIn(static_cast<uint64_t>(sc.activeVoices * 1000 + sc.polyphony));
+        mixIn(engine_->getTuning().generation());
+        mixIn(std::hash<std::string>()(search_));
+        mixIn(favoritesOnly_ * 2 + abSlot_);
+        for (const auto& p : engine_->getPresetManager().getPresets()) mixIn(p.isFavorite);
+        mixIn(static_cast<uint64_t>(zoom_ * 100.0f));
         if (page_ == 5) mixIn(sc.grPos);
     }
     return h;
@@ -1370,8 +1473,8 @@ void Editor::drawMeter(Canvas& c, const Rect& r, float level, bool reverse) {
 // chain, keyboard and output meters stay put and the plugin reads as one instrument.
 // =============================================================================
 void Editor::drawPageBar(Canvas& c) {
-    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "SPACE", "EQ", "DYNAMICS", "SCOPE"};
-    static const float widths[kNumPages] = {78.0f, 62.0f, 84.0f, 72.0f, 52.0f, 98.0f, 74.0f};
+    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "SPACE", "EQ", "DYNAMICS", "SCOPE", "PLAY"};
+    static const float widths[kNumPages] = {72.0f, 56.0f, 76.0f, 66.0f, 46.0f, 88.0f, 66.0f, 56.0f};
     float x = 16.0f;
     const float y = pageBarY_, h = 30.0f;
     float total = 0.0f;
@@ -1390,7 +1493,15 @@ void Editor::drawPageBar(Canvas& c) {
     // Output meters, always visible: peak L / R and the compressor's gain reduction
     const ScopeSnapshot* sc = engine_ ? &engine_->getScopeSnapshot() : nullptr;
     auto toLevel = [](float v) { return std::clamp((20.0f * std::log10(v + 1e-6f) + 60.0f) / 60.0f, 0.0f, 1.0f); };
-    const float mx = 16.0f + all.w + 24.0f, mw = kEditorWidth - 16.0f - mx - 112.0f;
+    const float mx = 16.0f + all.w + 16.0f + 64.0f, mw = kEditorWidth - 16.0f - mx - 112.0f;
+    // CPU (share of the real-time budget) and voices in use
+    if (sc) {
+        char cpu[32];
+        std::snprintf(cpu, sizeof(cpu), "CPU %.0f%%", std::min(999.0f, sc->cpuLoad * 100.0f));
+        c.drawText(cpu, mx - 64.0f, y + 16.0f, kLinkSub, sc->cpuLoad > 0.7f ? kAccent : kTextMuted);
+        std::snprintf(cpu, sizeof(cpu), "%d / %d", sc->activeVoices, sc->polyphony);
+        c.drawText(cpu, mx - 64.0f, y + 4.0f, kLinkSub, kTextDim);
+    }
     c.drawText("OUT", mx, y + 10.0f, kPanelTitle, kTextMuted);
     drawMeter(c, {mx + 34.0f, y + 16.0f, mw - 34.0f, 9.0f}, toLevel(sc ? sc->meterL : 0.0f));
     drawMeter(c, {mx + 34.0f, y + 5.0f, mw - 34.0f, 9.0f}, toLevel(sc ? sc->meterR : 0.0f));
@@ -1411,6 +1522,7 @@ void Editor::drawPage(Canvas& c) {
         case 4: drawLabEq(c, area); break;
         case 5: drawLabDynamics(c, area); break;
         case 6: drawLabScope(c, area); break;
+        case 7: drawLabPlay(c, area); break;
         default: break;
     }
     for (size_t i = 0; i < modKnobs_.size(); ++i) drawKnob(c, modKnobs_[i], draggedModKnob_ == static_cast<int>(i));
@@ -1578,12 +1690,15 @@ void Editor::drawLabSpace(Canvas& c, const Rect& area) {
     drawCard(c, rev, "REVERB");
     c.drawText("Type", rev.x + 16.0f, rev.maxY() - 56.0f, kKnobLabel, kTextMuted);
     addStepper(c, {rev.x + 70.0f, rev.maxY() - 62.0f, colW - 86.0f, 26.0f}, kParamReverbType);
-    modKnobs_.push_back({kParamReverbMix, {rev.x + 20.0f, rev.y + 12.0f, colW * 0.5f - 30.0f, 89.0f}, 23.0f, false});
-    modKnobs_.push_back({kParamReverbDecay, {rev.x + colW * 0.5f + 10.0f, rev.y + 12.0f, colW * 0.5f - 30.0f, 89.0f}, 23.0f, false});
+    const float rw = colW / 3.0f;
+    const uint32_t rids[3] = {kParamReverbMix, kParamReverbDecay, kParamReverbPreDelay};
+    for (int i = 0; i < 3; ++i) modKnobs_.push_back({rids[i], {rev.x + rw * i + 6.0f, rev.y + 12.0f, rw - 12.0f, 89.0f}, 20.0f, false});
     const Rect echo{colX, area.y, colW, area.h - 210.0f - 8.0f};
-    drawCard(c, echo, "TAPE ECHO");
+    drawCard(c, echo, "TAPE ECHO & CHORUS");
     c.drawText("Sync", echo.x + 16.0f, echo.maxY() - 56.0f, kKnobLabel, kTextMuted);
     addStepper(c, {echo.x + 70.0f, echo.maxY() - 62.0f, colW - 86.0f, 26.0f}, kParamEchoSync);
+    c.drawText("Chorus", echo.x + 16.0f, echo.maxY() - 92.0f, kKnobLabel, kTextMuted);
+    addStepper(c, {echo.x + 70.0f, echo.maxY() - 98.0f, colW - 86.0f, 26.0f}, kParamChorusMode);
     const float ew = colW / 3.0f;
     const uint32_t eids[3] = {kParamDelayMix, kParamDelayTime, kParamDelayFeedback};
     for (int i = 0; i < 3; ++i) modKnobs_.push_back({eids[i], {echo.x + ew * i + 6.0f, echo.y + 12.0f, ew - 12.0f, 77.0f}, 17.0f, false});
@@ -2010,4 +2125,267 @@ void Editor::drawAmpView(Canvas& c, const Rect& card) {
     if (is200A) c.drawText("200A circuit active: the curve shown is the Suitcase preamp", area.x + 10.0f, area.y - 0.0f + 1.0f, kLinkSub, kTextDim);
 }
 
+// ---- Play: tuning (Scala microtuning), playing realism, polyphony and the editor ------------
+void Editor::refreshTunings() {
+    tunings_ = availableTunings();
+    forceRedraw_ = true;
+}
+
+void Editor::selectTuning(int index) {
+    if (!engine_ || tunings_.empty()) return;
+    const int n = static_cast<int>(tunings_.size());
+    index = ((index % n) + n) % n;
+    tuningError_.clear();
+    if (!applyTuning(engine_->getTuning(), tunings_[static_cast<size_t>(index)], &tuningError_)) {
+        tuningError_ = tunings_[static_cast<size_t>(index)].name + ": " + tuningError_;
+    }
+    forceRedraw_ = true;
+}
+
+void Editor::drawLabPlay(Canvas& c, const Rect& area) {
+    if (tunings_.empty()) refreshTunings();
+    auto caption = [&](const char* s, float x, float y) { c.drawText(s, x, y, kPanelTitle, kTextDim); };
+    auto chevron = [&](const Rect& r, float dx) {
+        c.strokeLine(r.midX() - dx, r.midY() + 3.5f, r.midX(), r.midY(), kTextMuted, 1.4f);
+        c.strokeLine(r.midX(), r.midY(), r.midX() - dx, r.midY() - 3.5f, kTextMuted, 1.4f);
+    };
+
+    // --- Tuning -------------------------------------------------------------------------------
+    const Rect tune{area.x, area.y, 430.0f, area.h};
+    drawCard(c, tune, "TUNING");
+    const std::string current = engine_ ? engine_->getTuning().name() : "12-TET";
+    caption("SCALE (SCALA .SCL)", tune.x + 18.0f, tune.maxY() - 48.0f);
+    tunePrev_ = {tune.x + 16.0f, tune.maxY() - 82.0f, 28.0f, 28.0f};
+    tuneNext_ = {tune.maxX() - 44.0f, tunePrev_.y, 28.0f, 28.0f};
+    tuneBox_ = {tunePrev_.maxX() + 4.0f, tunePrev_.y, tuneNext_.x - tunePrev_.maxX() - 8.0f, 28.0f};
+    for (const Rect* r : {&tunePrev_, &tuneNext_, &tuneBox_}) {
+        c.fillRoundRect(*r, 5.0f, kInsetBg);
+        c.strokeRoundRect(*r, 5.0f, kPanelBorder, 1.0f);
+    }
+    chevron(tunePrev_, -3.0f);
+    chevron(tuneNext_, 3.0f);
+    const std::string shown = current == "12-TET" ? "12-TET (equal temperament)" : current;
+    drawCentered(c, ellipsize(c, shown, tuneBox_.w - 16.0f, kStripOptionOn), tuneBox_, kStripOptionOn, kTextPrimary);
+
+    tuneLoad_ = {tune.x + 16.0f, tune.maxY() - 120.0f, 128.0f, 28.0f};
+    tuneFolder_ = {tuneLoad_.maxX() + 8.0f, tuneLoad_.y, 128.0f, 28.0f};
+    modalButton(c, tuneLoad_, "Load .scl...", false, static_cast<bool>(host_.chooseTuningFile));
+    modalButton(c, tuneFolder_, "Tunings Folder", false, static_cast<bool>(host_.openUrl));
+    if (!tuningError_.empty()) {
+        c.drawText(ellipsize(c, tuningError_, tune.w - 36.0f, kLinkSub), tune.x + 18.0f, tuneLoad_.y - 16.0f, kLinkSub, kAccent);
+    }
+
+    // Deviation of one octave (C4..B4) from equal temperament, in cents
+    const Rect plot{tune.x + 16.0f, tune.y + 118.0f, tune.w - 32.0f, tuneLoad_.y - 30.0f - (tune.y + 118.0f)};
+    c.fillRoundRect(plot, 6.0f, kInsetBg);
+    c.strokeRoundRect(plot, 6.0f, kPanelBorder, 1.0f);
+    const float mid = plot.midY(), span = plot.h * 0.5f - 18.0f;
+    c.fillRect({plot.x + 1.0f, mid - 0.5f, plot.w - 2.0f, 1.0f}, kTextDim.withAlpha(0.7f));
+    for (float ct : {-50.0f, 50.0f}) {
+        const float yy = mid + span * ct / 50.0f;
+        c.fillRect({plot.x + 1.0f, yy - 0.5f, plot.w - 2.0f, 1.0f}, kHairline.withAlpha(0.7f));
+        c.drawText(ct > 0 ? "+50 c" : "-50 c", plot.x + 4.0f, ct > 0 ? yy - 12.0f : yy + 2.0f, kLinkSub, kTextDim);
+    }
+    static const char* noteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    const float bw = (plot.w - 50.0f) / 12.0f;
+    for (int k = 0; k < 12; ++k) {
+        const float bx = plot.x + 44.0f + bw * k;
+        float cents = 0.0f;
+        const bool mapped = !engine_ || engine_->getTuning().centsFor(60 + k, cents);
+        drawCentered(c, noteNames[k], {bx, plot.y + 4.0f, bw, 12.0f}, kLinkSub, kTextDim);
+        if (!mapped) {
+            drawCentered(c, "x", {bx, mid - 6.0f, bw, 12.0f}, kLinkSub, kTextDim);
+            continue;
+        }
+        const float h = span * std::clamp(cents, -60.0f, 60.0f) / 50.0f;
+        c.fillRoundRect({bx + bw * 0.22f, std::min(mid, mid + h), bw * 0.56f, std::max(1.5f, std::fabs(h))}, 2.0f, kAccent);
+        char b[12];
+        std::snprintf(b, sizeof(b), "%+.0f", cents);
+        drawCentered(c, b, {bx, plot.maxY() - 16.0f, bw, 12.0f}, kLinkSub, kTextMuted);
+    }
+    caption("CENTS FROM EQUAL TEMPERAMENT, C4 - B4", plot.x + 4.0f, plot.maxY() + 6.0f);
+
+    // Concert pitch and transposition
+    modKnobs_.push_back({kParamMasterTune, {tune.x + 16.0f, tune.y + 12.0f, 120.0f, 89.0f}, 22.0f, false});
+    caption("TRANSPOSE", tune.x + 176.0f, tune.y + 76.0f);
+    addStepper(c, {tune.x + 176.0f, tune.y + 44.0f, 120.0f, 26.0f}, kParamTranspose);
+
+    // --- Playing & realism ----------------------------------------------------------------------
+    const float rx = area.x + 438.0f, rw = area.w - 438.0f;
+    const Rect inst{rx, area.maxY() - 250.0f, rw, 250.0f};
+    drawCard(c, inst, "PLAYING & REALISM");
+    caption("POLYPHONY", inst.x + 18.0f, inst.maxY() - 48.0f);
+    addStepper(c, {inst.x + 110.0f, inst.maxY() - 56.0f, 110.0f, 26.0f}, kParamPolyphony);
+    const float kw = rw / 3.0f;
+    const uint32_t ids[3] = {kParamCondition, kParamSympathetic, kParamStereoSpread};
+    for (int i = 0; i < 3; ++i) modKnobs_.push_back({ids[i], {inst.x + kw * i + 8.0f, inst.y + 66.0f, kw - 16.0f, 89.0f}, 23.0f, false});
+    float ty = inst.y + 46.0f;
+    for (const auto& line : wrap(c, "Condition: per-key tuning, voicing and wear. Sympathetic: undamped tines ring along with the pedal down. "
+                                    "Key Spread: low keys left, high keys right.", rw - 36.0f, kLinkSub)) {
+        c.drawText(line, inst.x + 18.0f, ty, kLinkSub, kTextDim);
+        ty -= c.lineHeight(kLinkSub) + 1.0f;
+    }
+
+    // --- Editor and performance ------------------------------------------------------------------
+    const Rect ed{rx, area.y, rw, area.h - 250.0f - 8.0f};
+    drawCard(c, ed, "EDITOR & PERFORMANCE");
+    caption("ZOOM", ed.x + 18.0f, ed.maxY() - 48.0f);
+    zoomPrev_ = {ed.x + 110.0f, ed.maxY() - 56.0f, 26.0f, 26.0f};
+    zoomNext_ = {ed.x + 194.0f, zoomPrev_.y, 26.0f, 26.0f};
+    for (const Rect* r : {&zoomPrev_, &zoomNext_}) {
+        c.fillRoundRect(*r, 5.0f, kInsetBg);
+        c.strokeRoundRect(*r, 5.0f, kPanelBorder, 1.0f);
+    }
+    chevron(zoomPrev_, -3.0f);
+    chevron(zoomNext_, 3.0f);
+    char zb[16];
+    std::snprintf(zb, sizeof(zb), "%.0f%%", zoom_ * 100.0f);
+    drawCentered(c, zb, {zoomPrev_.maxX(), zoomPrev_.y, zoomNext_.x - zoomPrev_.maxX(), 26.0f}, kStripOptionOn,
+                 host_.requestZoom ? kTextPrimary : kTextDim);
+    if (engine_) {
+        const ScopeSnapshot& sc = engine_->getScopeSnapshot();
+        char b[64];
+        std::snprintf(b, sizeof(b), "CPU %.1f%%   Voices %d / %d", sc.cpuLoad * 100.0f, sc.activeVoices, sc.polyphony);
+        c.drawText(b, ed.x + 240.0f, ed.maxY() - 48.0f, kKnobLabel, kTextMuted);
+    }
+    // A/B compare
+    caption("COMPARE", ed.x + 18.0f, ed.maxY() - 84.0f);
+    abRects_[0] = {ed.x + 110.0f, ed.maxY() - 92.0f, 40.0f, 26.0f};
+    abRects_[1] = {ed.x + 154.0f, abRects_[0].y, 40.0f, 26.0f};
+    abRects_[2] = {ed.x + 204.0f, abRects_[0].y, 120.0f, 26.0f};
+    for (int i = 0; i < 2; ++i) {
+        const bool on = abSlot_ == i;
+        c.fillRoundRect(abRects_[i], 5.0f, on ? kAccent : kInsetBg);
+        c.strokeRoundRect(abRects_[i], 5.0f, on ? kAccent : kPanelBorder, 1.0f);
+        drawCentered(c, i == 0 ? "A" : "B", abRects_[i], kSegmentOn, on ? kHeaderBg : kTextMuted);
+    }
+    modalButton(c, abRects_[2], abSlot_ == 0 ? "Copy A to B" : "Copy B to A", false);
+    ty = ed.maxY() - 120.0f;
+    for (const auto& line : wrap(c, "Pedals: the sustain pedal is continuous (half-pedalling lets the dampers graze), CC 66 is sostenuto, "
+                                    "CC 67 the soft pedal. Release velocity sets how fast the dampers land. Microtuning also follows "
+                                    "MIDI Tuning Standard SysEx; the tuning is saved with the project.", rw - 36.0f, kAboutBody)) {
+        c.drawText(line, ed.x + 18.0f, ty, kAboutBody, kTextMuted);
+        ty -= c.lineHeight(kAboutBody) + 2.0f;
+    }
+}
+
+// Keeps the live settings in the current slot and brings in the other one (a slot never used
+// starts as a copy of the current sound)
+void Editor::switchAb(int slot) {
+    if (!engine_ || slot == abSlot_) return;
+    for (uint32_t p = 0; p < kNumParams; ++p) abStore_[abSlot_][p] = engine_->getParamNormalized(p);
+    abValid_[abSlot_] = true;
+    if (abValid_[slot]) {
+        engine_->pushUndoState(slot == 0 ? "Compare A" : "Compare B");
+        for (uint32_t p = 0; p < kNumParams; ++p) setParam(p, abStore_[slot][p]);
+    } else {
+        abStore_[slot] = abStore_[abSlot_];
+        abValid_[slot] = true;
+    }
+    abSlot_ = slot;
+    forceRedraw_ = true;
+}
+
+bool Editor::mouseDownPlay(float x, float y) {
+    if (!engine_) return false;
+    auto currentIndex = [&]() {
+        const std::string name = engine_->getTuning().name();
+        for (size_t i = 0; i < tunings_.size(); ++i) {
+            if (tunings_[i].name == name || (name == "12-TET" && tunings_[i].scl.empty())) return static_cast<int>(i);
+        }
+        return -1;
+    };
+    if (tunePrev_.contains(x, y) || tuneNext_.contains(x, y) || tuneBox_.contains(x, y)) {
+        refreshTunings();
+        const int cur = currentIndex();
+        const int dir = tunePrev_.contains(x, y) ? -1 : 1;
+        selectTuning(cur < 0 ? (dir > 0 ? 0 : static_cast<int>(tunings_.size()) - 1) : cur + dir);
+        return true;
+    }
+    if (tuneLoad_.contains(x, y) && host_.chooseTuningFile) {
+        const std::string path = host_.chooseTuningFile();
+        if (path.empty()) return true;
+        TuningEntry e;
+        tuningError_.clear();
+        if (!loadTuningFile(path, e)) { tuningError_ = "Could not read " + path; return true; }
+        if (!applyTuning(engine_->getTuning(), e, &tuningError_)) { tuningError_ = e.name + ": " + tuningError_; return true; }
+        // Keep a copy in the Tunings folder so it stays in the list
+        try {
+            namespace fs = std::filesystem;
+            const fs::path dir = userTuningsDirectory();
+            fs::create_directories(dir);
+            const fs::path src(path);
+            if (src.parent_path() != dir) {
+                fs::copy_file(src, dir / src.filename(), fs::copy_options::overwrite_existing);
+                fs::path kbm = src;
+                kbm.replace_extension(".kbm");
+                if (fs::exists(kbm)) fs::copy_file(kbm, dir / kbm.filename(), fs::copy_options::overwrite_existing);
+            }
+        } catch (...) {
+        }
+        refreshTunings();
+        return true;
+    }
+    if (tuneFolder_.contains(x, y) && host_.openUrl) {
+        const std::string dir = userTuningsDirectory();
+        try { std::filesystem::create_directories(dir); } catch (...) {}
+        std::string url = "file://";
+        for (char ch : dir) {
+            if (ch == ' ') url += "%20";
+            else if (ch == '\\') url += '/';
+            else url += ch;
+        }
+        host_.openUrl(url);
+        return true;
+    }
+    for (int i = 0; i < 2; ++i) {
+        if (abRects_[i].contains(x, y)) { switchAb(i); return true; }
+    }
+    if (abRects_[2].contains(x, y)) {
+        const int other = 1 - abSlot_;
+        for (uint32_t p = 0; p < kNumParams; ++p) abStore_[other][p] = engine_->getParamNormalized(p);
+        abValid_[other] = true;
+        return true;
+    }
+    if ((zoomPrev_.contains(x, y) || zoomNext_.contains(x, y)) && host_.requestZoom) {
+        const int n = static_cast<int>(sizeof(kZoomSteps) / sizeof(kZoomSteps[0]));
+        int cur = 0;
+        for (int i = 0; i < n; ++i) if (std::fabs(kZoomSteps[i] - zoom_) < std::fabs(kZoomSteps[cur] - zoom_)) cur = i;
+        const int next = std::clamp(cur + (zoomPrev_.contains(x, y) ? -1 : 1), 0, n - 1);
+        saveEditorZoom(kZoomSteps[next]);
+        host_.requestZoom(kZoomSteps[next]);
+        return true;
+    }
+    return false;
+}
+
 } // namespace phs::gui
+
+namespace phs {
+
+namespace {
+std::string editorSettingsPath() { return (std::filesystem::path(userDataDirectory()) / "Editor.cfg").string(); }
+} // namespace
+
+float loadEditorZoom() {
+    std::ifstream in(editorSettingsPath());
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.rfind("Zoom=", 0) == 0) {
+            const float z = std::strtof(line.c_str() + 5, nullptr);
+            if (z >= 0.5f && z <= 3.0f) return z;
+        }
+    }
+    return 1.0f;
+}
+
+void saveEditorZoom(float zoom) {
+    try {
+        std::filesystem::create_directories(userDataDirectory());
+        std::ofstream out(editorSettingsPath());
+        out << "Zoom=" << zoom << "\n";
+    } catch (...) {
+    }
+}
+
+} // namespace phs

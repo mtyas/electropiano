@@ -1,6 +1,7 @@
 #include "../src/dsp/PhsSynthEngine.hpp"
 #include "../include/clap/clap.h"
 #include "../include/vst3/vst3_c_api.h"
+#include "../include/lv2/lv2_abi.h"
 #if defined(__APPLE__)
 #include <AudioUnit/AudioUnit.h>
 #include <dlfcn.h>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <vector>
+#include <tuple>
 #include <fstream>
 #include <iostream>
 #include <cassert>
@@ -227,6 +229,12 @@ bool testClapBundle(const char* dylibPath) {
 }
 
 // 3. Test compiled VST3 bundle via dlopen
+// First sample above -100 dBFS (the onset of a note in a test render), or -1
+int firstNonSilent(const std::vector<float>& x) {
+    for (size_t i = 0; i < x.size(); ++i) if (std::fabs(x[i]) > 1e-5f) return static_cast<int>(i);
+    return -1;
+}
+
 bool testVst3Bundle(const char* dylibPath) {
     std::printf("[TEST 3] Testing VST3 Bundle (%s)...\n", dylibPath);
     void* handle = dlopen(dylibPath, RTLD_LOCAL | RTLD_LAZY);
@@ -293,6 +301,7 @@ bool testVst3Bundle(const char* dylibPath) {
         Steinberg::tresult getEvent(Steinberg::int32, Steinberg::Vst::Event& e) override {
             std::memset(&e, 0, sizeof(e));
             e.type = Steinberg::Vst::Event::kNoteOnEvent;
+            e.sampleOffset = 512; // mid-block: must start exactly here
             e.noteOn.pitch = 67; // G4
             e.noteOn.velocity = 0.85f;
             return Steinberg::kResultOk;
@@ -320,13 +329,15 @@ bool testVst3Bundle(const char* dylibPath) {
     for (float s : outL) rms += s * s;
     rms = std::sqrt(rms / outL.size());
     std::printf("  -> VST3 Render 1024 frames RMS: %.5f\n", rms);
+    const int onsetVst3 = firstNonSilent(outL);
+    std::printf("  -> VST3 note at offset 512 starts at sample %d\n", onsetVst3);
 
     ctrl->release();
     proc->release();
     comp->terminate();
     comp->release();
     dlclose(handle);
-    return rms > 1e-4f;
+    return rms > 1e-4f && onsetVst3 >= 512 && onsetVst3 < 520;
 }
 
 // 4. Test compiled AudioUnit (.component) bundle via factory function
@@ -366,7 +377,7 @@ bool testAuBundle(const char* dylibPath) {
     auto renderFn = reinterpret_cast<RenderProc>(plug->Lookup(kAudioUnitRenderSelect));
 
     initFn(plug);
-    midiFn(plug, 0x90, 60, 110, 0);
+    midiFn(plug, 0x90, 60, 110, 300); // mid-slice: must start exactly here
 
     std::vector<float> outL(1024, 0.0f);
     std::vector<float> outR(1024, 0.0f);
@@ -388,11 +399,88 @@ bool testAuBundle(const char* dylibPath) {
     for (float s : outL) rms += s * s;
     rms = std::sqrt(rms / outL.size());
     std::printf("  -> AudioUnit Render 1024 frames RMS: %.5f\n", rms);
+    const int onsetAu = firstNonSilent(outL);
+    std::printf("  -> AU note at offset 300 starts at sample %d\n", onsetAu);
 
     std::free(abl);
     plug->Close(plug);
     dlclose(handle);
-    return rms > 1e-4f;
+    return rms > 1e-4f && onsetAu >= 300 && onsetAu < 308;
+}
+
+// LV2: load the bundle's binary as a host would, play a note mid-block, save and restore the state
+namespace lv2test {
+std::vector<std::string> uris;
+LV2_URID map(LV2_URID_Map_Handle, const char* uri) {
+    for (size_t i = 0; i < uris.size(); ++i) if (uris[i] == uri) return static_cast<LV2_URID>(i + 1);
+    uris.push_back(uri);
+    return static_cast<LV2_URID>(uris.size());
+}
+std::vector<uint8_t> saved;
+uint32_t savedType = 0;
+LV2_State_Status store(LV2_State_Handle, uint32_t, const void* v, size_t n, uint32_t type, uint32_t) {
+    saved.assign(static_cast<const uint8_t*>(v), static_cast<const uint8_t*>(v) + n);
+    savedType = type;
+    return LV2_STATE_SUCCESS;
+}
+const void* retrieve(LV2_State_Handle, uint32_t, size_t* n, uint32_t* type, uint32_t* flags) {
+    *n = saved.size(); *type = savedType; *flags = 0;
+    return saved.data();
+}
+} // namespace lv2test
+
+bool testLv2Bundle(const char* dylibPath) {
+    std::printf("[TEST 4b] Testing LV2 Bundle (%s)...\n", dylibPath);
+    void* handle = dlopen(dylibPath, RTLD_LOCAL | RTLD_LAZY);
+    if (!handle) { std::fprintf(stderr, "  FAIL: dlopen failed: %s\n", dlerror()); return false; }
+    using DescFn = const LV2_Descriptor* (*)(uint32_t);
+    auto descFn = reinterpret_cast<DescFn>(dlsym(handle, "lv2_descriptor"));
+    const LV2_Descriptor* d = descFn ? descFn(0) : nullptr;
+    if (!d || !dlsym(handle, "lv2ui_descriptor")) { std::fprintf(stderr, "  FAIL: LV2 descriptors missing\n"); dlclose(handle); return false; }
+    LV2_URID_Map mapper{nullptr, lv2test::map};
+    LV2_Feature mapFeature{LV2_URID__map, &mapper};
+    const LV2_Feature* features[] = {&mapFeature, nullptr};
+    LV2_Handle inst = d->instantiate(d, 48000.0, "", features);
+    if (!inst) { std::fprintf(stderr, "  FAIL: instantiate\n"); dlclose(handle); return false; }
+    std::printf("  -> Found LV2 plugin: %s\n", d->URI);
+
+    std::vector<float> l(1024), r(1024);
+    std::vector<float> ports(phs::kNumParams);
+    for (uint32_t i = 0; i < phs::kNumParams; ++i) ports[i] = phs::kExpandedFactoryPresets[0].values[i];
+    // A sequence holding one note-on at frame 300
+    alignas(8) uint8_t seqBuf[256] = {};
+    auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(seqBuf);
+    auto* ev = reinterpret_cast<LV2_Atom_Event*>(seq + 1);
+    ev->time.frames = 300;
+    ev->body.size = 3;
+    ev->body.type = lv2test::map(nullptr, LV2_MIDI__MidiEvent);
+    uint8_t* midi = reinterpret_cast<uint8_t*>(&ev->body + 1);
+    midi[0] = 0x90; midi[1] = 60; midi[2] = 110;
+    seq->atom.type = lv2test::map(nullptr, "http://lv2plug.in/ns/ext/atom#Sequence");
+    seq->atom.size = sizeof(LV2_Atom_Sequence_Body) + sizeof(LV2_Atom_Event) + 8;
+    d->connect_port(inst, 0, seq);
+    d->connect_port(inst, 1, l.data());
+    d->connect_port(inst, 2, r.data());
+    for (uint32_t i = 0; i < phs::kNumParams; ++i) d->connect_port(inst, 3 + i, &ports[i]);
+    d->activate(inst);
+    d->run(inst, 1024);
+    const int onset = firstNonSilent(l);
+    float rms = 0.0f;
+    for (float x : l) rms += x * x;
+    rms = std::sqrt(rms / l.size());
+    std::printf("  -> LV2 Render 1024 frames RMS: %.5f | note at frame 300 starts at %d\n", rms, onset);
+
+    // State round trip
+    const auto* stateIf = static_cast<const LV2_State_Interface*>(d->extension_data(LV2_STATE__interface));
+    bool stateOk = false;
+    if (stateIf) {
+        stateIf->save(inst, lv2test::store, nullptr, 0, nullptr);
+        stateOk = stateIf->restore(inst, lv2test::retrieve, nullptr, 0, nullptr) == LV2_STATE_SUCCESS && lv2test::saved.size() > 400;
+    }
+    std::printf("  -> LV2 state round trip: %s (%zu bytes)\n", stateOk ? "ok" : "FAILED", lv2test::saved.size());
+    d->cleanup(inst);
+    dlclose(handle);
+    return rms > 1e-4f && onset >= 300 && onset < 308 && stateOk;
 }
 
 // 5. Render musical showcase WAV files for Rhodes Mk I, Wurlitzer 200A, and Dyno-My-Piano
@@ -819,7 +907,7 @@ bool testStudioEffects() {
     for (int type = 0; type < 2; ++type) {
         PhsEffectsChain fx; fx.prepare(fs);
         float p[kNumParams]; defaults(p);
-        p[kParamReverbMix] = 0.8f; p[kParamReverbDecay] = 0.8f; p[kParamReverbType] = static_cast<float>(type);
+        p[kParamReverbMix] = 0.8f; p[kParamReverbDecay] = 0.8f; p[kParamReverbType] = static_cast<float>(type) / 3.0f; // 0 Classic Hall, 1 Spring
         double e = 0; bool finite = true;
         for (int i = 0; i < 48000; ++i) {
             float l, r; fx.processStereoSample(i == 0 ? 0.4f : 0.0f, p, 0.0f, l, r);
@@ -1007,6 +1095,245 @@ bool testMasteringChain() {
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Playability: restrikes, voice stealing, tuning, pedals
+// ---------------------------------------------------------------------------
+bool testPlayability() {
+    std::printf("[TEST 13] Playability (restrike, voice stealing, tuning, pedals)...\n");
+    bool ok = true;
+    const float fs = 48000.0f;
+    auto fresh = [&](int preset) {
+        auto e = std::make_unique<phs::PhsSynthEngine>();
+        e->prepare(fs);
+        e->loadPreset(preset, false);
+        return e;
+    };
+
+    // A soft restrike of a loud, ringing tine keeps the ring it lands on
+    {
+        auto e = fresh(0);
+        e->noteOn(60, 1.0f);
+        renderMono(*e, static_cast<int>(0.4f * fs));
+        e->noteOn(60, 0.2f);
+        const auto restruck = renderMono(*e, static_cast<int>(0.1f * fs));
+        auto ref = fresh(0);
+        ref->noteOn(60, 0.2f);
+        const auto alone = renderMono(*ref, static_cast<int>(0.1f * fs));
+        const float a = rmsOf(restruck, 960, 3840), b = rmsOf(alone, 960, 3840);
+        std::printf("  -> soft restrike of a ringing tine: rms %.4f vs %.4f struck alone\n", a, b);
+        if (!(a > 1.5f * b) || !allFinite(restruck)) { std::fprintf(stderr, "  !! the restrike lost the ringing tine\n"); ok = false; }
+    }
+
+    // Stealing a voice fades it out instead of cutting it
+    {
+        auto e = fresh(8); // reeds: no in-place restrike, so steals and restarts both fade
+        e->handleMidiEvent(0xB0, 64, 127);
+        for (int n = 0; n < phs::kMaxVoices; ++n) {
+            e->noteOn(36 + n, 0.9f);
+            renderMono(*e, 64);
+        }
+        const auto before = renderMono(*e, 256);
+        e->noteOn(36 + phs::kMaxVoices, 0.05f);
+        const auto after = renderMono(*e, 64);
+        float maxStep = 0.0f;
+        for (size_t i = 1; i < before.size(); ++i) maxStep = std::max(maxStep, std::fabs(before[i] - before[i - 1]));
+        const float stealStep = std::fabs(after[0] - before.back());
+        std::printf("  -> step at the steal %.5f (largest step in the 256 samples before: %.5f)\n", stealStep, maxStep);
+        if (stealStep > 1.5f * maxStep + 1e-4f) { std::fprintf(stderr, "  !! stealing a voice clicks\n"); ok = false; }
+    }
+
+    // Pitch of note 69 (A4) under various tunings, measured from the output
+    auto pitchOf = [&](phs::PhsSynthEngine& e, int note) {
+        e.noteOn(note, 0.7f);
+        const auto x = renderMono(e, static_cast<int>(0.5f * fs));
+        e.noteOff(note);
+        renderMono(e, static_cast<int>(0.3f * fs));
+        return autocorrFreq(x, 6000, 8192, fs);
+    };
+    auto cents = [](float f, float ref) { return 1200.0f * std::log2(f / ref); };
+    {
+        auto e = fresh(0);
+        e->setParamNormalized(phs::kParamCondition, 0.0f);
+        e->setParamNormalized(phs::kParamMasterTune, (432.0f - 415.0f) / 51.0f);
+        const float a432 = pitchOf(*e, 69);
+        e->setParamNormalized(phs::kParamMasterTune, 25.0f / 51.0f);
+        e->setParamNormalized(phs::kParamTranspose, (24.0f + 7.0f) / 48.0f);
+        const float fifth = pitchOf(*e, 62); // D4 + 7 = A4
+        std::printf("  -> master tune 432: %.1f Hz | D4 transposed +7: %.1f Hz\n", a432, fifth);
+        if (std::fabs(cents(a432, 432.0f)) > 6.0f || std::fabs(cents(fifth, 440.0f)) > 6.0f) {
+            std::fprintf(stderr, "  !! master tune / transpose off\n"); ok = false;
+        }
+        // Transposing while a note is held must not leave it stuck
+        e->setParamNormalized(phs::kParamTranspose, 0.5f);
+        e->noteOn(60, 0.7f);
+        renderMono(*e, 512);
+        e->setParamNormalized(phs::kParamTranspose, (24.0f + 5.0f) / 48.0f);
+        e->noteOff(60);
+        renderMono(*e, static_cast<int>(1.5f * fs));
+        if (e->isNoteActive(60) || e->isNoteActive(65)) { std::fprintf(stderr, "  !! transposed note stuck\n"); ok = false; }
+    }
+
+    // Scala: 19-tone equal temperament, a .kbm that leaves keys unmapped, MTS SysEx, state round trip
+    {
+        std::string scl = "! 19edo.scl\n19-tone equal temperament\n 19\n!\n";
+        for (int k = 1; k <= 19; ++k) scl += std::to_string(1200.0 * k / 19.0) + "\n";
+        auto e = fresh(0);
+        e->setParamNormalized(phs::kParamCondition, 0.0f);
+        std::string err;
+        const bool loaded = e->getTuning().load(scl, "", "19-EDO", &err);
+        // Linear mapping: degree 0 on key 60, key 69 at 440 Hz. Key 70 is one 19-EDO step above it.
+        const float f70 = pitchOf(*e, 70);
+        const float expected70 = 440.0f * std::pow(2.0f, 1.0f / 19.0f);
+        std::printf("  -> 19-EDO: key 70 %.1f Hz (expected %.1f) | parse %s\n", f70, expected70, loaded ? "ok" : err.c_str());
+        if (!loaded || std::fabs(cents(f70, expected70)) > 6.0f) { std::fprintf(stderr, "  !! Scala tuning wrong\n"); ok = false; }
+
+        // Round trip through the plugin state
+        const auto blob = e->saveState();
+        auto r = fresh(0);
+        r->setState(blob.data(), blob.size());
+        if (r->getTuning().name() != "19-EDO") { std::fprintf(stderr, "  !! tuning not restored from state\n"); ok = false; }
+
+        // A mapping with only white keys mapped: black keys stay silent
+        const std::string kbm = "! white.kbm\n12\n0\n127\n60\n69\n440.0\n7\n0\nx\n1\nx\n2\n3\nx\n4\nx\n5\nx\n6\n";
+        const std::string major = "! 12tet\n12-TET\n12\n100.\n200.\n300.\n400.\n500.\n600.\n700.\n800.\n900.\n1000.\n1100.\n2/1\n";
+        r->getTuning().load(major, kbm, "white keys");
+        r->noteOn(61, 0.8f);
+        const auto silent = renderMono(*r, 4800);
+        std::printf("  -> unmapped key (C#4 in a white-key mapping): rms %.6f\n", rmsOf(silent, 0, 4800));
+        if (rmsOf(silent, 0, 4800) > 1e-5f) { std::fprintf(stderr, "  !! an unmapped key sounded\n"); ok = false; }
+
+        // MIDI Tuning Standard single-note change: key 69 -> 69 + 50 cents
+        auto m = fresh(0);
+        m->setParamNormalized(phs::kParamCondition, 0.0f);
+        const uint8_t mts[] = {0xF0, 0x7F, 0x7F, 0x08, 0x02, 0x00, 0x01, 69, 69, 0x40, 0x00, 0xF7};
+        m->handleSysEx(mts, sizeof(mts));
+        const float fm = pitchOf(*m, 69);
+        std::printf("  -> MTS: A4 +50 cents -> %.1f Hz (%.1f cents)\n", fm, cents(fm, 440.0f));
+        if (std::fabs(cents(fm, 440.0f) - 50.0f) > 6.0f) { std::fprintf(stderr, "  !! MTS retune failed\n"); ok = false; }
+    }
+
+    // Pedals: half pedal decays between fully up and fully down; sostenuto holds only the held key
+    {
+        auto tail = [&](int pedal) {
+            auto e = fresh(0);
+            e->setParamNormalized(phs::kParamReverbMix, 0.0f); // measure the dampers, not the room
+            e->handleMidiEvent(0xB0, 64, static_cast<uint8_t>(pedal));
+            e->noteOn(48, 0.8f);
+            renderMono(*e, static_cast<int>(0.3f * fs));
+            e->noteOff(48);
+            const auto x = renderMono(*e, static_cast<int>(0.6f * fs));
+            return rmsOf(x, static_cast<size_t>(0.4f * fs), static_cast<size_t>(0.2f * fs));
+        };
+        const float up = tail(0), half = tail(64), down = tail(127);
+        std::printf("  -> tail 0.4 s after release: pedal up %.5f | half %.5f | down %.5f\n", up, half, down);
+        if (!(up < half && half < down)) { std::fprintf(stderr, "  !! half-pedalling not between up and down\n"); ok = false; }
+
+        auto e = fresh(0);
+        e->noteOn(48, 0.8f);
+        renderMono(*e, 256);
+        e->handleMidiEvent(0xB0, 66, 127);   // sostenuto catches C3
+        e->noteOn(60, 0.8f);
+        renderMono(*e, 256);
+        e->noteOff(48);
+        e->noteOff(60);
+        renderMono(*e, static_cast<int>(0.8f * fs));
+        const bool held = e->isNoteActive(48), released = !e->isNoteActive(60);
+        std::printf("  -> sostenuto: held key rings %s | later key released %s\n", held ? "yes" : "no", released ? "yes" : "no");
+        if (!held || !released) { std::fprintf(stderr, "  !! sostenuto wrong\n"); ok = false; }
+    }
+
+    // Polyphony: with 8 voices, a 12-note chord leaves at most 8 sounding
+    {
+        auto e = fresh(0);
+        e->setParamNormalized(phs::kParamPolyphony, 0.0f);
+        for (int n = 0; n < 12; ++n) e->noteOn(48 + n, 0.7f);
+        renderMono(*e, 1024);
+        int sounding = 0;
+        for (int n = 0; n < 12; ++n) sounding += e->isNoteActive(48 + n);
+        std::printf("  -> polyphony 8: %d of 12 notes sounding\n", sounding);
+        if (sounding > 8) { std::fprintf(stderr, "  !! polyphony limit ignored\n"); ok = false; }
+    }
+
+    // Sympathetic resonance: adds a little with the pedal down, nothing with it up
+    {
+        auto play = [&](float amount, int pedal) {
+            auto e = fresh(0);
+            e->setParamNormalized(phs::kParamSympathetic, amount);
+            e->handleMidiEvent(0xB0, 64, static_cast<uint8_t>(pedal));
+            e->noteOn(48, 0.9f);
+            e->noteOn(55, 0.8f);
+            renderMono(*e, static_cast<int>(0.2f * fs));
+            e->noteOff(48);
+            e->noteOff(55);
+            const auto x = renderMono(*e, static_cast<int>(1.0f * fs));
+            return std::make_pair(rmsOf(x, 0, x.size()), allFinite(x));
+        };
+        const auto off = play(0.0f, 127), on = play(0.3f, 127), upOff = play(0.0f, 0), upOn = play(1.0f, 0);
+        const float gainDb = 20.0f * std::log10(on.first / off.first);
+        std::printf("  -> sympathetic 30%% (pedal down): %+.2f dB | 100%% pedal up: %+.2f dB\n", gainDb, 20.0f * std::log10(upOn.first / upOff.first));
+        if (!on.second || gainDb < 0.2f || gainDb > 4.0f || std::fabs(20.0f * std::log10(upOn.first / upOff.first)) > 0.5f) {
+            std::fprintf(stderr, "  !! sympathetic resonance level out of range\n"); ok = false;
+        }
+    }
+
+    // Keyboard spread: a low note leans left, a high note right; none when spread is 0
+    {
+        auto balance = [&](int note, float spread) {
+            auto e = fresh(1); // dry stage piano: no auto-pan
+            e->setParamNormalized(phs::kParamStereoSpread, spread);
+            e->noteOn(note, 0.8f);
+            std::vector<float> l(9600), r(9600);
+            for (int i = 0; i < 9600; i += 256) e->processBlock(l.data() + i, r.data() + i, std::min(256, 9600 - i));
+            return 20.0f * std::log10(rmsOf(l, 0, l.size()) / rmsOf(r, 0, r.size()));
+        };
+        const float low = balance(36, 1.0f), high = balance(96, 1.0f), centre = balance(36, 0.0f);
+        std::printf("  -> key spread L/R: C2 %+.1f dB | C7 %+.1f dB | spread off %+.1f dB\n", low, high, centre);
+        if (!(low > 3.0f && high < -3.0f && std::fabs(centre) < 0.5f)) { std::fprintf(stderr, "  !! key spread wrong\n"); ok = false; }
+    }
+
+    // New reverbs: finite, decaying tails; pre-delay moves the onset
+    {
+        for (int algo : {phs::kRevStudioHall, phs::kRevPlate}) {
+            auto onset = [&](float preDelay) {
+                phs::PhsEffectsChain fx;
+                fx.prepare(fs);
+                float p[phs::kNumParams];
+                for (uint32_t i = 0; i < phs::kNumParams; ++i) p[i] = phs::kParamMetadata[i].defaultValue;
+                p[phs::kParamTremoloDepth] = 0.0f;
+                p[phs::kParamReverbMix] = 1.0f;
+                p[phs::kParamReverbType] = algo / 3.0f;
+                p[phs::kParamReverbPreDelay] = preDelay;
+                std::vector<float> l(static_cast<size_t>(3.0f * fs)), r(l.size());
+                for (size_t i = 0; i < l.size(); ++i) fx.processStereoSample(i < 48 ? 0.5f : 0.0f, p, 0.0f, l[i], r[i]);
+                // First sample of the wet tail (after the dry click has gone)
+                size_t first = 0;
+                for (size_t i = 200; i < l.size(); ++i) if (std::fabs(l[i]) > 1e-4f) { first = i; break; }
+                const float early = rmsOf(l, static_cast<size_t>(0.1f * fs), static_cast<size_t>(0.3f * fs));
+                const float late = rmsOf(l, static_cast<size_t>(2.5f * fs), static_cast<size_t>(0.5f * fs));
+                return std::make_tuple(first, early, late, allFinite(l) && allFinite(r));
+            };
+            const auto a0 = onset(0.0f), a1 = onset(0.5f);
+            std::printf("  -> %s: onset %zu vs %zu samples with 60 ms pre-delay | tail %.5f -> %.6f\n",
+                        algo == phs::kRevPlate ? "plate" : "studio hall", std::get<0>(a0), std::get<0>(a1),
+                        std::get<1>(a0), std::get<2>(a0));
+            if (!std::get<3>(a0) || std::get<1>(a0) < 1e-4f || !(std::get<2>(a0) < std::get<1>(a0)) ||
+                std::get<0>(a1) < std::get<0>(a0) + 2600) {
+                std::fprintf(stderr, "  !! reverb wrong\n"); ok = false;
+            }
+        }
+    }
+
+    // Condition: the same key is the same every time, and different keys differ
+    {
+        auto e = fresh(0);
+        e->setParamNormalized(phs::kParamCondition, 1.0f);
+        const float a = pitchOf(*e, 69), b = pitchOf(*e, 69);
+        std::printf("  -> condition 100%%: A4 %.2f Hz twice: %.2f Hz (%.1f cents from 440)\n", a, b, cents(a, 440.0f));
+        if (std::fabs(a - b) > 0.05f || std::fabs(cents(a, 440.0f)) > 12.0f) { std::fprintf(stderr, "  !! condition not deterministic / too far\n"); ok = false; }
+    }
+    return ok;
+}
+
 } // namespace
 
 int main() {
@@ -1017,6 +1344,7 @@ int main() {
     ok &= testClapBundle("build/electropiano.clap/Contents/MacOS/electropiano");
     ok &= testVst3Bundle("build/electropiano.vst3/Contents/MacOS/electropiano");
     ok &= testAuBundle("build/electropiano.component/Contents/MacOS/electropiano");
+    ok &= testLv2Bundle("build/electropiano.lv2/electropiano.dylib");
 #endif
     ok &= testExpression();
     ok &= testModulationMatrix();
@@ -1025,6 +1353,7 @@ int main() {
     ok &= testMacros();
     ok &= testStudioEffects();
     ok &= testMasteringChain();
+    ok &= testPlayability();
     renderShowcaseDemos();
 
     if (ok) {

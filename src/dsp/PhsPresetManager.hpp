@@ -208,6 +208,19 @@ public:
         scanUserPresets();
     }
 
+    // Favourites are kept by preset name in Favorites.txt beside the Presets folder
+    static std::string favoritesPath() {
+        return (std::filesystem::path(getUserPresetsDirectory()).parent_path() / "Favorites.txt").string();
+    }
+    void setFavorite(int index, bool favorite) {
+        if (index < 0 || index >= static_cast<int>(presets_.size())) return;
+        presets_[static_cast<size_t>(index)].isFavorite = favorite;
+        try {
+            std::ofstream out(favoritesPath());
+            for (const auto& p : presets_) if (p.isFavorite) out << p.name << "\n";
+        } catch (...) {}
+    }
+
     static std::string getUserPresetsDirectory() {
 #if defined(_WIN32)
         const char* appData = std::getenv("APPDATA");
@@ -265,6 +278,18 @@ public:
                 }
             }
         } catch (...) {}
+        applyFavorites();
+    }
+
+    void applyFavorites() {
+        std::ifstream in(favoritesPath());
+        std::vector<std::string> names;
+        std::string line;
+        while (std::getline(in, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty()) names.push_back(line);
+        }
+        for (auto& p : presets_) p.isFavorite = std::find(names.begin(), names.end(), p.name) != names.end();
     }
 
     const std::vector<PresetItem>& getPresets() const { return presets_; }
@@ -373,6 +398,7 @@ private:
                 valuesRead = pIdx;
             }
         }
+        if (valuesRead > 0 && valuesRead < kNumParams) migrateParams(outItem.values.data(), valuesRead);
         if (valuesRead > 0 && valuesRead <= kNumParamsV2) {
             // Saved before the stage selectors existed: the Model choice implied them
             const float stage = stepIndex(outItem.values[kParamModelType], 3) == 2 ? 1.0f : 0.0f;

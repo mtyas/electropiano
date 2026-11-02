@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>English</string>
+  <key>CFBundleExecutable</key><string>electropiano</string>
+  <key>CFBundleIdentifier</key><string>@PHS_BUNDLE_ID@</string>
+  <key>CFBundleName</key><string>electropiano</string>
+  <key>CFBundlePackageType</key><string>@PHS_PACKAGE_TYPE@</string>
+  <key>CFBundleShortVersionString</key><string>@PROJECT_VERSION@</string>
+  <key>CFBundleVersion</key><string>@PROJECT_VERSION@</string>
+  <key>CSResourcesFileMapped</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+@PHS_EXTRA_PLIST@</dict>
+</plist>

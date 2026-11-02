@@ -1,3 +1,50 @@
+## electropiano — next release: playing, tuning, space and formats
+
+### Playing
+- **Sample-accurate** notes and automation in **VST3** and **Audio Unit** (CLAP already was): timing
+  no longer depends on the buffer size, and every automation point in a block is applied.
+- **Repeated notes strike the ringing tine**, as on the instrument, instead of restarting it.
+- **Voice stealing fades** the stolen note out over 4 ms instead of cutting it.
+- **Pedals**: continuous sustain with **half-pedalling**, **sostenuto** (CC 66), **soft pedal** (CC 67),
+  and **release velocity** sets how fast the dampers land. Re-pressing the pedal lifts the dampers again.
+- **Polyphony** 8 – 64 voices.
+
+### Tuning
+- **Master tune** (A4 = 415 – 466 Hz) and **transpose** (±24 semitones).
+- **Microtuning**: Scala `.scl` scales with `.kbm` keyboard mappings, built-in just intonation,
+  Pythagorean, meantone, Werckmeister III, 19 / 24 / 31-EDO, and **MIDI Tuning Standard** SysEx.
+  The tuning is saved with the project.
+
+### Realism and space
+- **Sympathetic resonance**: with the pedal down, undamped tines ring along with what you play.
+- **Condition**: per-key variation of tuning, voicing, decay and hammer wear.
+- **Key spread** across the stereo field.
+- New reverbs: **Studio Hall** (8-line feedback delay network, true stereo) and **Plate**, plus
+  **pre-delay**; the previous hall stays as *Classic Hall*. A **tri-chorus** mode.
+- Offline bounces use the 4× oversampled preamp automatically.
+
+### Editor
+- **Resizable** (75 – 200 %, or drag the window where the host allows), remembered between sessions.
+- New **Play** page: tuning with a cents chart, polyphony, condition, sympathetic, key spread,
+  **A/B compare** and zoom. A **CPU** and voices read-out on every page.
+- Preset browser: **search**, **favourites** and preset descriptions.
+
+### Formats and engine
+- **LV2** on macOS, Windows and Linux (with the editor).
+- CPU: denormals are flushed (no more spikes from decaying tails on x86), an idle instance uses
+  next to no CPU, the hammer-contact solve is about twice as fast, the 200A vibrato oscillator and
+  Rhodes voices are cheaper, and parameter smoothing only runs for knobs that are moving.
+- Fixes: undo / redo and loading a state no longer write audio-thread data from the UI thread;
+  the scope is published safely; a note-on no longer jumps every smoothed knob; the Audio Unit's
+  component version now matches the release.
+- CMake is now the single build on every platform (the Makefile wraps it); pull requests are
+  checked for unintended sound changes.
+
+**Projects saved with 0.79 load with the same settings and reverb**; the new controls start at
+values that leave the old sound unchanged.
+
+---
+
 ## electropiano v0.79 — expression, modulation, mastering
 
 Physically modelled **Rhodes** and **Wurlitzer 200A** electric pianos, built from stages you

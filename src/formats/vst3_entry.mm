@@ -9,6 +9,7 @@
 
 #include "../../include/vst3/vst3_c_api.h"
 #include "../dsp/PhsSynthEngine.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -92,7 +93,7 @@ public:
                     h->performEdit(paramId, static_cast<ParamValue>(normVal));
                     h->endEdit(paramId);
                 }
-            });
+            }, [this](int w, int ht) { return requestResize(w, ht); });
         }
         NSView* parentView = static_cast<NSView*>(parent);
         if (parentView && nsView_) {
@@ -107,17 +108,19 @@ public:
                 h->performEdit(paramId, static_cast<ParamValue>(normVal));
                 h->endEdit(paramId);
             }
-        });
+        }, [this](int w, int ht) { return requestResize(w, ht); });
         if (hwnd_) return kResultOk;
 #elif defined(__linux__)
         IComponentHandler* h = handler_;
+        // IPlugFrame must be called from the host's UI thread, which the X11 editor thread is not:
+        // the zoom control's new size applies when the editor is next opened (host resizes still work)
         x11Win_ = phs::createPhsX11EditorView(static_cast<Window>(reinterpret_cast<uintptr_t>(parent)), engine_, [h](uint32_t paramId, float normVal) {
             if (h) {
                 h->beginEdit(paramId);
                 h->performEdit(paramId, static_cast<ParamValue>(normVal));
                 h->endEdit(paramId);
             }
-        });
+        }, [](int, int) { return false; });
         if (x11Win_) return kResultOk;
 #endif
         return kInternalError;
@@ -151,22 +154,49 @@ public:
         if (!size) return kInvalidArgument;
         size->left = 0;
         size->top = 0;
-        size->right = phs::kEditorWidth;
-        size->bottom = phs::kEditorHeight;
+        size->right = width_;
+        size->bottom = height_;
         return kResultOk;
     }
 
-    tresult SMTG_API onSize(ViewRect*) override { return kResultOk; }
+    tresult SMTG_API onSize(ViewRect* r) override {
+        if (!r) return kInvalidArgument;
+        width_ = r->right - r->left;
+        height_ = r->bottom - r->top;
+#if defined(__APPLE__)
+        if (nsView_) [nsView_ setFrameSize:NSMakeSize(width_, height_)];
+#elif defined(_WIN32)
+        if (hwnd_) phs::setPhsWin32EditorSize(hwnd_, width_, height_);
+#elif defined(__linux__)
+        if (x11Win_) phs::setPhsX11EditorSize(x11Win_, width_, height_);
+#endif
+        return kResultOk;
+    }
+
+    // The editor's zoom control: ask the host to resize (it answers with onSize)
+    bool requestResize(int w, int h) {
+        if (!plugFrame_) return false;
+        ViewRect r;
+        r.right = w;
+        r.bottom = h;
+        if (plugFrame_->resizeView(this, &r) != kResultOk) return false;
+        width_ = w;
+        height_ = h;
+        return true;
+    }
     tresult SMTG_API onFocus(TBool) override { return kResultOk; }
     tresult SMTG_API setFrame(IPlugFrame* frame) override {
         plugFrame_ = frame;
         return kResultOk;
     }
-    tresult SMTG_API canResize() override { return kResultFalse; }
+    // Resizable at the layout's aspect ratio, from half to three times its size
+    tresult SMTG_API canResize() override { return kResultTrue; }
     tresult SMTG_API checkSizeConstraint(ViewRect* rect) override {
         if (!rect) return kInvalidArgument;
-        rect->right = rect->left + phs::kEditorWidth;
-        rect->bottom = rect->top + phs::kEditorHeight;
+        const float z = std::clamp(std::min((rect->right - rect->left) / static_cast<float>(phs::kEditorWidth),
+                                            (rect->bottom - rect->top) / static_cast<float>(phs::kEditorHeight)), 0.5f, 3.0f);
+        rect->right = rect->left + phs::scaledEditorWidth(z);
+        rect->bottom = rect->top + phs::scaledEditorHeight(z);
         return kResultOk;
     }
 
@@ -175,6 +205,8 @@ private:
     phs::PhsSynthEngine* engine_ = nullptr;
     IComponentHandler* handler_ = nullptr;
     IPlugFrame* plugFrame_ = nullptr;
+    int32 width_ = phs::scaledEditorWidth(phs::loadEditorZoom());
+    int32 height_ = phs::scaledEditorHeight(phs::loadEditorZoom());
 #if defined(__APPLE__)
     NSView* nsView_ = nil;
 #elif defined(_WIN32)
@@ -299,22 +331,24 @@ public:
 
     tresult SMTG_API setState(IBStream* state) override {
         if (!state) return kInvalidArgument;
-        phs::PhsSynthEngine::SerializedState st{};
-        int32 bytesRead = 0;
         // Older versions saved fewer parameters, so a shorter stream is fine: setState reads by version
-        if (state->read(&st, sizeof(st), &bytesRead) != kResultOk || bytesRead < 12) {
-            return kInternalError;
+        std::vector<uint8_t> st;
+        uint8_t buf[4096];
+        for (;;) {
+            int32 n = 0;
+            if (state->read(buf, sizeof(buf), &n) != kResultOk || n <= 0 || st.size() > (8u << 20)) break;
+            st.insert(st.end(), buf, buf + n);
         }
-        return engine_.setState(&st, static_cast<size_t>(bytesRead)) ? kResultOk : kInternalError;
+        if (st.size() < 12) return kInternalError;
+        return engine_.setState(st.data(), st.size()) ? kResultOk : kInternalError;
     }
 
     tresult SMTG_API getState(IBStream* state) override {
         if (!state) return kInvalidArgument;
-        phs::PhsSynthEngine::SerializedState st{};
-        engine_.getState(st);
+        const std::vector<uint8_t> st = engine_.saveState();
         int32 bytesWritten = 0;
-        state->write(&st, sizeof(st), &bytesWritten);
-        return (bytesWritten == static_cast<int32>(sizeof(st))) ? kResultOk : kInternalError;
+        state->write(const_cast<uint8_t*>(st.data()), static_cast<int32>(st.size()), &bytesWritten);
+        return (bytesWritten == static_cast<int32>(st.size())) ? kResultOk : kInternalError;
     }
 
     // --- IAudioProcessor ---
@@ -365,20 +399,74 @@ public:
         return kResultOk;
     }
 
+    // One note, expression or automation point, at its position in the block
+    struct TimedEvent {
+        int32 offset;
+        uint32 seq;           // arrival order, so simultaneous events keep their order
+        enum Kind : uint8_t { Param, NoteOn, NoteOff, Expression, PolyPressure } kind;
+        int16 channel, pitch;
+        uint32 id;            // parameter id or note-expression type
+        int32 noteId;
+        double value;         // parameter value, velocity, pressure or expression value
+    };
+    static constexpr int kMaxTimedEvents = 4096;
+
+    void addTimedEvent(const TimedEvent& e) {
+        if (numTimed_ < kMaxTimedEvents) timed_[numTimed_++] = e;
+    }
+
+    void applyTimedEvent(const TimedEvent& e) {
+        switch (e.kind) {
+            case TimedEvent::Param:
+                engine_.setParamNormalized(e.id, static_cast<float>(e.value));
+                break;
+            case TimedEvent::NoteOn:
+                rememberNoteId(e.noteId, e.pitch);
+                engine_.noteOn(e.pitch, static_cast<float>(e.value), e.channel);
+                break;
+            case TimedEvent::NoteOff:
+                engine_.noteOff(e.pitch, e.channel, static_cast<float>(e.value));
+                break;
+            case TimedEvent::Expression: {
+                const int key = keyForNoteId(e.noteId);
+                if (key < 0) break;
+                if (e.id == kTuningTypeID) engine_.setNoteTuning(key, static_cast<float>((e.value - 0.5) * 240.0));
+                else if (e.id == kBrightnessTypeID) engine_.setNoteBrightness(key, static_cast<float>(e.value));
+                else if (e.id == kExpressionTypeID) engine_.setNotePressure(key, static_cast<float>(e.value));
+                break;
+            }
+            case TimedEvent::PolyPressure:
+                engine_.setNotePressure(e.pitch, static_cast<float>(e.value));
+                break;
+        }
+    }
+
     tresult SMTG_API process(ProcessData& data) override {
-        // 1. Apply input parameter changes
+        // Notes, expressions and every automation point are applied at their sample position:
+        // the block is rendered in pieces between them
+        numTimed_ = 0;
+        uint32 seq = 0;
+        const int32 numSamples = std::max<int32>(0, data.numSamples);
+        auto clampOffset = [&](int32 o) { return std::clamp<int32>(o, 0, std::max<int32>(0, numSamples - 1)); };
+
+        // 1. Parameter changes: every point of every queue
         if (data.inputParameterChanges) {
             const int32 numParamsChanged = data.inputParameterChanges->getParameterCount();
             for (int32 i = 0; i < numParamsChanged; ++i) {
                 IParamValueQueue* queue = data.inputParameterChanges->getParameterData(i);
                 if (!queue) continue;
                 const int32 numPoints = queue->getPointCount();
-                if (numPoints > 0) {
+                for (int32 k = 0; k < numPoints; ++k) {
                     int32 sampleOffset = 0;
                     ParamValue value = 0.0;
-                    if (queue->getPoint(numPoints - 1, sampleOffset, value) == kResultOk) {
-                        engine_.setParamNormalized(queue->getParameterId(), static_cast<float>(value));
-                    }
+                    if (queue->getPoint(k, sampleOffset, value) != kResultOk) continue;
+                    TimedEvent e{};
+                    e.offset = clampOffset(sampleOffset);
+                    e.seq = seq++;
+                    e.kind = TimedEvent::Param;
+                    e.id = queue->getParameterId();
+                    e.value = value;
+                    addTimedEvent(e);
                 }
             }
         }
@@ -395,47 +483,71 @@ public:
             const auto* pc = static_cast<const ProcessContextHead*>(data.processContext);
             if (pc->state & (1u << 10)) engine_.setTempo(static_cast<float>(pc->tempo)); // kTempoValid
         }
+        // kOffline = 2: the host is bouncing, so the engine may use its high-quality path
+        engine_.setOfflineRendering(data.processMode == 2);
 
-        // 2. Apply note events
+        // 2. Note events
         if (data.inputEvents) {
             const int32 numEvents = data.inputEvents->getEventCount();
             for (int32 i = 0; i < numEvents; ++i) {
                 Event ev{};
-                if (data.inputEvents->getEvent(i, ev) == kResultOk) {
-                    if (ev.type == Event::kNoteOnEvent) {
-                        if (ev.noteOn.velocity > 0.0f) {
-                            rememberNoteId(ev.noteOn.noteId, ev.noteOn.pitch);
-                            engine_.noteOn(ev.noteOn.pitch, ev.noteOn.velocity, ev.noteOn.channel);
-                        } else {
-                            engine_.noteOff(ev.noteOn.pitch, ev.noteOn.channel);
-                        }
-                    } else if (ev.type == Event::kNoteOffEvent) {
-                        engine_.noteOff(ev.noteOff.pitch, ev.noteOff.channel);
-                    } else if (ev.type == Event::kNoteExpressionValueEvent) {
-                        const int key = keyForNoteId(ev.noteExpressionValue.noteId);
-                        if (key >= 0) {
-                            const double v = ev.noteExpressionValue.value; // normalised
-                            if (ev.noteExpressionValue.typeId == kTuningTypeID) engine_.setNoteTuning(key, static_cast<float>((v - 0.5) * 240.0));
-                            else if (ev.noteExpressionValue.typeId == kBrightnessTypeID) engine_.setNoteBrightness(key, static_cast<float>(v));
-                            else if (ev.noteExpressionValue.typeId == kExpressionTypeID) engine_.setNotePressure(key, static_cast<float>(v));
-                        }
-                    } else if (ev.type == Event::kPolyPressureEvent) {
-                        engine_.setNotePressure(ev.polyPressure.pitch, ev.polyPressure.pressure);
-                    }
+                if (data.inputEvents->getEvent(i, ev) != kResultOk) continue;
+                TimedEvent e{};
+                e.offset = clampOffset(ev.sampleOffset);
+                e.seq = seq++;
+                if (ev.type == Event::kNoteOnEvent) {
+                    e.channel = ev.noteOn.channel;
+                    e.pitch = ev.noteOn.pitch;
+                    e.noteId = ev.noteOn.noteId;
+                    e.value = ev.noteOn.velocity;
+                    e.kind = ev.noteOn.velocity > 0.0f ? TimedEvent::NoteOn : TimedEvent::NoteOff;
+                    if (e.kind == TimedEvent::NoteOff) e.value = 0.5;
+                } else if (ev.type == Event::kNoteOffEvent) {
+                    e.kind = TimedEvent::NoteOff;
+                    e.channel = ev.noteOff.channel;
+                    e.pitch = ev.noteOff.pitch;
+                    e.value = ev.noteOff.velocity;
+                } else if (ev.type == Event::kNoteExpressionValueEvent) {
+                    e.kind = TimedEvent::Expression;
+                    e.id = ev.noteExpressionValue.typeId;
+                    e.noteId = ev.noteExpressionValue.noteId;
+                    e.value = ev.noteExpressionValue.value;
+                } else if (ev.type == Event::kPolyPressureEvent) {
+                    e.kind = TimedEvent::PolyPressure;
+                    e.pitch = ev.polyPressure.pitch;
+                    e.value = ev.polyPressure.pressure;
+                } else {
+                    continue;
                 }
+                addTimedEvent(e);
             }
         }
+        std::sort(timed_, timed_ + numTimed_, [](const TimedEvent& a, const TimedEvent& b) {
+            return a.offset != b.offset ? a.offset < b.offset : a.seq < b.seq;
+        });
 
-        // 3. Render audio samples
-        if (data.numSamples > 0 && data.numOutputs > 0 && data.outputs && data.outputs[0].channelBuffers32) {
-            float* outL = data.outputs[0].channelBuffers32[0];
-            float* outR = (data.outputs[0].numChannels > 1)
-                        ? data.outputs[0].channelBuffers32[1]
-                        : outL;
-            engine_.processBlock(outL, outR, data.numSamples);
-            data.outputs[0].silenceFlags = 0;
+        // 3. Render between events
+        float* outL = nullptr;
+        float* outR = nullptr;
+        if (data.numOutputs > 0 && data.outputs && data.outputs[0].channelBuffers32) {
+            outL = data.outputs[0].channelBuffers32[0];
+            outR = (data.outputs[0].numChannels > 1) ? data.outputs[0].channelBuffers32[1] : outL;
         }
+        int idx = 0;
+        int32 cur = 0;
+        while (cur < numSamples) {
+            while (idx < numTimed_ && timed_[idx].offset <= cur) applyTimedEvent(timed_[idx++]);
+            const int32 next = idx < numTimed_ ? timed_[idx].offset : numSamples;
+            if (outL) engine_.processBlock(outL + cur, outR + cur, next - cur);
+            else engine_.processBlock(nullptr, nullptr, next - cur);
+            cur = next;
+        }
+        while (idx < numTimed_) applyTimedEvent(timed_[idx++]);
 
+        if (outL) {
+            // While idle the engine writes exact zeros, so downstream processing can be skipped
+            data.outputs[0].silenceFlags = engine_.isIdle() ? ((1ull << data.outputs[0].numChannels) - 1) : 0;
+        }
         return kResultOk;
     }
 
@@ -556,6 +668,8 @@ public:
 private:
     std::atomic<uint32> refCount_{1};
     phs::PhsSynthEngine engine_{};
+    TimedEvent timed_[kMaxTimedEvents];
+    int numTimed_ = 0;
     SpeakerArrangement outArr_ = kSpeakerArrStereo;
     IComponentHandler* componentHandler_ = nullptr;
 };
