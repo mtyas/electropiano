@@ -33,8 +33,17 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
     reed, electrostatic pickup and the 200A's amplifier simulated component by component.
 - **Swappable stages** — Resonator (tine / reed) → Pickup (magnetic / electrostatic) →
   Amp (Suitcase / 200A circuit), mixed freely.
-- **32 controls**: hammer, tine/reed, pickup geometry, amp, cabinet, envelope filter, phaser,
-  chorus, tape echo and reverb. Labels and read-outs follow the stages you choose.
+- **100+ controls** across seven pages, with labels and read-outs that follow the stages you
+  choose: hammer, tine/reed, pickup geometry, amp, envelope filter, phaser, chorus, tape echo, reverb.
+- **MPE and per-note expression** — per-note pitch bend (tines and reeds, even while they ring),
+  pressure and slide; CLAP note expressions.
+- **Modulation matrix** — two LFOs (five shapes, tempo sync), six slots, nine sources, 39 targets.
+- **"Impossible instrument" macros** — tine material (steel → glass → carbon), up to four pickups,
+  audio-rate gap FM, and a tine ⇄ reed **morph** inside a held note.
+- **A mastering section** — four-band parametric EQ with an interactive curve and live spectrum,
+  a full compressor and output limiter, nine miked cabinets with mic position, distance and room,
+  spring or hall reverb, tempo-synced tremolo / phaser / echo, oversampled preamp.
+- **A scope that shows the physics** — the tine and hammer, the pickup field, the amp saturating.
 - **28 factory presets**, including OpenWurli's calibrated 200A and cross-instrument hybrids.
 - **One editor on every platform**, MIDI learn, undo/redo, user presets, a playable keyboard.
 - **CLAP and VST3** on macOS, Windows and Linux, plus **Audio Unit** and a **standalone app**
@@ -48,6 +57,27 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 <tr>
 <td align="center">Wurlitzer 200A (OpenWurli)</td>
 <td align="center">Hybrid: Rhodes tine through the 200A circuit</td>
+</tr>
+</table>
+
+## One window, seven pages
+
+<table>
+<tr>
+<td><img src="docs/images/editor_mod.png" alt="Modulation matrix"></td>
+<td><img src="docs/images/editor_eq.png" alt="Mastering EQ"></td>
+</tr>
+<tr>
+<td align="center">Modulation, MPE and tempo sync</td>
+<td align="center">Four-band mastering EQ with live spectrum</td>
+</tr>
+<tr>
+<td><img src="docs/images/editor_dynamics.png" alt="Compressor and limiter"></td>
+<td><img src="docs/images/editor_scope.png" alt="Scope"></td>
+</tr>
+<tr>
+<td align="center">Compressor and limiter</td>
+<td align="center">Scope: tine, hammer, pickup field, amp</td>
 </tr>
 </table>
 
@@ -101,7 +131,7 @@ No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
 
 | Path | |
 |---|---|
-| `src/dsp/` | Engine, Rhodes voice (`PhsVoice.hpp`), effects, parameters, presets |
+| `src/dsp/` | Engine, Rhodes voice (`PhsVoice.hpp`), effects, cabinets (`PhsCabinet.hpp`), parameters, presets |
 | `src/dsp/wurli/` | Wurlitzer 200A model (OpenWurli port) |
 | `src/gui/` | Shared editor (`PhsEditor`), CoreGraphics / Win32 / X11 hosts, software renderer |
 | `src/formats/` | CLAP, VST3, AU and standalone wrappers |
@@ -116,7 +146,14 @@ No external SDKs are needed: the CLAP and VST3 interfaces are in `include/`.
 - **The OpenWurli port** against OpenWurli's SPICE-derived acceptance targets: preamp DC
   operating point within 0.1 mV, 15.56 dB gain at 1 kHz, 880.5 Hz pickup corner, field-solved
   pickup tables to 10⁻¹², and the Twin-T vibrato oscillator's rate and LED current.
-- That the CLAP, VST3 and AU builds load and render.
+- **MPE:** per-note bend reads within a fraction of a percent of the target pitch on tines and reeds,
+  and one channel's bend never reaches another's.
+- **Modulation, macros, tempo sync and oversampling** each have a measured test (LFO depth, morph =
+  the other resonator exactly, echo lands on the beat, aliasing drops about 18 dB).
+- **The curves you see are the audio you hear:** the EQ and cabinet responses drawn in the editor are
+  checked against measured sine sweeps through the real processing; the compressor's slope against
+  its ratio.
+- That the CLAP, VST3 and AU builds load and render, and that older saved states still load.
 
 ## Credits
 

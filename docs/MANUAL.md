@@ -1,8 +1,8 @@
 # electropiano — User Manual
 
-**Version 0.77** · by Matthew Tyas (mtyas) · GPL-3.0
+**Version 0.79** · by Matthew Tyas (mtyas) · GPL-3.0
 
-![electropiano with a Rhodes Mk I preset and a chord held](images/editor_rhodes.png)
+![electropiano with a Rhodes Mk I preset and a chord held](images/editor_sound.png)
 
 electropiano is a physically modelled electric piano. Nothing in it is sampled: every note
 is computed from the mechanics and electronics of the instruments, so it responds to your
@@ -19,6 +19,12 @@ What makes electropiano different is that each instrument is built from **stages
 swap**: put a Rhodes tine in front of the Wurlitzer's pickup and amplifier, or a Wurlitzer
 reed on a Rhodes pickup, and every combination in between.
 
+On top of the instruments sits a modern production layer: **per-note MPE expression**, a
+**modulation matrix** with two LFOs, "impossible instrument" **macros** (tine material, several
+pickups, audio-rate gap FM, tine-to-reed morphing), a miked **cabinet** section, a four-band
+**mastering EQ**, a full **compressor and limiter**, and a **scope** that shows the hammer, the
+pickup field and the amp saturating in real time.
+
 ---
 
 ## Contents
@@ -30,12 +36,17 @@ reed on a Rhodes pickup, and every combination in between.
 5. [Pickup and tone controls](#5-pickup-and-tone-controls)
 6. [Amp](#6-amp)
 7. [Effects](#7-effects)
-8. [Presets](#8-presets)
-9. [Playing, MIDI and automation](#9-playing-midi-and-automation)
-10. [Tips for sound design](#10-tips-for-sound-design)
-11. [Troubleshooting](#11-troubleshooting)
-12. [How it works](#12-how-it-works)
-13. [Credits and licence](#13-credits-and-licence)
+8. [Modulation and expression](#8-modulation-and-expression)
+9. [Macros: the impossible instrument](#9-macros-the-impossible-instrument)
+10. [Space: reverb, echo and cabinets](#10-space-reverb-echo-and-cabinets)
+11. [Mastering EQ and dynamics](#11-mastering-eq-and-dynamics)
+12. [Scope](#12-scope)
+13. [Presets](#13-presets)
+14. [Playing, MIDI and automation](#14-playing-midi-and-automation)
+15. [Tips for sound design](#15-tips-for-sound-design)
+16. [Troubleshooting](#16-troubleshooting)
+17. [How it works](#17-how-it-works)
+18. [Credits and licence](#18-credits-and-licence)
 
 ---
 
@@ -59,7 +70,7 @@ the download quarantine flag once, in Terminal:
 xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/electropiano.clap ~/Library/Audio/Plug-Ins/VST3/electropiano.vst3 ~/Library/Audio/Plug-Ins/Components/electropiano.component
 ```
 
-The window is 900 × 740 pixels and looks the same on all three systems:
+The window is 900 × 776 pixels and looks the same on all three systems:
 
 ![The same editor drawn by the Windows / Linux renderer](images/editor_windows_linux.png)
 
@@ -77,7 +88,7 @@ From left to right:
   voicing *and* its three stages (see below). Choose one as a starting point.
 - **Preset** — `‹` and `›` step through presets; click the name to open the preset browser.
 - **Undo / Redo** — every knob move, preset change and stage change can be undone.
-- **MIDI** — MIDI-learn mode (see [section 9](#9-playing-midi-and-automation)).
+- **MIDI** — MIDI-learn mode (see [section 14](#14-playing-midi-and-automation)).
 - **i** — about electropiano and the work it builds on.
 
 ### Signal chain
@@ -88,6 +99,25 @@ Three switches, read left to right: what vibrates (**Resonator**), what turns th
 into a voltage (**Pickup**) and what amplifies it (**Amp**). The panels below change their
 names and controls to match what you select.
 
+### Pages
+
+![The page bar](images/editor_sound.png)
+
+Under the signal chain a **page bar** switches the middle of the window between seven pages.
+The header, signal chain, keyboard and the live **output meters** (peak L / R and the
+compressor's gain reduction, at the right of the bar) stay on screen on every page, so you can
+play and change presets while you edit.
+
+| Page | What it holds |
+|---|---|
+| **Sound** | The instrument panels: resonator, pickup, amp, filter, phaser, chorus, echo, reverb, output. |
+| **Mod** | Two LFOs, the six-slot modulation matrix, MPE expression, tempo sync and oversampling. |
+| **Macros** | Material, pickups, gap FM and morph. |
+| **Space** | Cabinets and microphone, reverb and tape echo. |
+| **EQ** | A four-band parametric mastering equaliser with an interactive curve and live spectrum. |
+| **Dynamics** | Compressor and output limiter, with transfer curve and gain-reduction history. |
+| **Scope** | The tine and hammer, the pickup field and the amp's saturation, live. |
+
 ### Knobs
 
 - **Drag** up and down to turn a knob. Hold **Shift** for fine control.
@@ -96,6 +126,14 @@ names and controls to match what you select.
 - **Right-click** a knob for *MIDI Learn*, *Forget MIDI CC* and *Reset to Default*.
 - The orange arc shows the value; Bass and Treble arcs grow from the centre (cut ↔ boost).
 - A small blue tag such as `CC74` means the knob is mapped to a MIDI controller.
+- Larger knobs have a scale around them; the ticks the value has passed light up.
+
+### Choosing from lists
+
+Settings with several choices appear as a box with arrows (`‹ Sine ›`).
+**Click the middle** to open a **list** of every choice and pick one; click the **arrows** to step
+through them. Modulation sources and targets, LFO shapes, tempo divisions, cabinets and the
+oversampling quality all work this way. Switches with two states simply toggle.
 
 ### Keyboard strip
 
@@ -180,9 +218,12 @@ calibrated Wurlitzer 200A exactly.** Turn them to depart from it.
 | **Drive / Volume** | Preamp saturation: clean to gritty. | The 200A's volume pot feeding the power amp. Push it to drive the amp into its rails (default 80 %). |
 | **Tremolo / Vibrato** | Stereo auto-pan depth. | Vibrato depth: the photoresistor network inside the preamp's feedback loop. |
 | **Speed** | Pan rate. | Vibrato rate. The 200A's own oscillator runs at about 5.6 Hz; the knob speeds it up or slows it down. |
-| **Cabinet** | Speaker cabinet character: 0 = direct (flat), up = small-speaker roll-off, cone saturation and thermal compression. | Same. |
+| **Cabinet** | With the *Speaker (200A)* cabinet: character from direct (flat) up through small-speaker roll-off, cone saturation and thermal compression. With any other cabinet it becomes **Cab Drive**, how hard the speaker is pushed. See [Space](#10-space-reverb-echo-and-cabinets). | Same. |
 
 The **mod wheel** adds tremolo / vibrato depth on top of the knob.
+
+**Tremolo, phaser and echo can lock to the host tempo**, and the suitcase preamp can be
+oversampled to keep hard saturation clean: see [section 8](#8-modulation-and-expression).
 
 ---
 
@@ -198,12 +239,181 @@ The effects follow the amp, in this order:
 | **Phaser** | 4-stage optical phaser: **Mix**, **Rate**. |
 | **Chorus** | Stereo BBD chorus: **Mix**. |
 | **Tape Echo** | **Mix**, **Time** (40 ms – 1 s), **Repeats**. Repeats darken and saturate like tape; changing the time glides the pitch, like a tape-speed change. |
-| **Reverb** | **Mix**, **Decay**. |
+| **Reverb** | **Mix**, **Decay**. Hall or Spring: see [Space](#10-space-reverb-echo-and-cabinets). |
 | **Output** | Master **Volume**. |
+
+After the reverb come the [mastering EQ](#11-mastering-eq-and-dynamics), the **compressor** and
+the **limiter**, then the output.
 
 ---
 
-## 8. Presets
+## 8. Modulation and expression
+
+![The Mod page](images/editor_mod.png)
+
+### LFOs and the modulation matrix
+
+Two LFOs (**LFO 1**, **LFO 2**) each have a **Rate** (0.05 – 40 Hz), a **Shape** (sine, triangle,
+saw, square, sample-and-hold) and a **Tempo Sync**: pick a division (1/1 … 1/8T) and the LFO locks
+to the host tempo; the Rate knob is parked while a division is chosen.
+
+The **matrix** has six slots. Each slot reads a **source**, scales it by an **amount**
+(−100 % … +100 %) and adds it to a **target**. Click the source or target box to pick from a
+list.
+
+| Sources | |
+|---|---|
+| **LFO 1 / LFO 2** | Swing both ways around the target's own setting. |
+| **Mod Wheel / Pressure** | 0 to 1: the wheel (CC 1) and channel / polyphonic aftertouch. |
+| **Velocity / Key** | The last note's velocity and its position on the keyboard. |
+| **Output Env** | How loud the instrument is playing: envelope-following modulation. |
+| **Random** | A new random value on every note. |
+
+Targets are 39 of the controls: the whole resonator, pickup, tone, amp and effects sections, plus
+Material, Gap FM, Morph, three EQ gains and the cabinet's mic position and distance. Targets keep
+their panel setting as the centre, so modulation never moves the knob itself.
+
+### Expression and MPE
+
+![The expression controls](images/editor_mod.png)
+
+Turn **MPE** on for an MPE controller (Seaboard, Linnstrument, Osmose…). Each note then lives on
+its own MIDI channel and has its own controllers:
+
+- **Pitch bend** bends that note only, on tines and reeds, even while it rings. **Bend range**
+  sets how far (1 – 48 semitones); channel 1 is the master channel and bends everything by ±2.
+- **Pressure** pulls the pickup closer to the tine: more bark and level. **Pressure** and **Slide**
+  have amount sliders (centre = no effect).
+- **Slide** (CC 74 on a member channel) opens the pickup coil: a brighter, more singing tone.
+
+With MPE off, pitch bend and aftertouch still work as a normal wheel and aftertouch.
+**CLAP** hosts that send note expressions (tuning, pressure, brightness) drive the same
+controls; in **VST3**, polyphonic pressure is supported, and note expressions where the host offers them.
+
+### Tempo sync and quality
+
+- **Tremolo**, **Phaser** and **Echo** each have a sync division: *Free* keeps the knob's Hz or
+  milliseconds; any division locks the effect to the host tempo (AU and the standalone app assume
+  120 BPM).
+- **Oversampling** runs the suitcase preamp at 2× or 4× so heavy drive doesn't fold back as
+  aliasing. 2× is the default; **Off** saves CPU. (The 200A circuit is always oversampled.)
+
+---
+
+## 9. Macros: the impossible instrument
+
+![The Macros page](images/editor_macros.png)
+
+Because every part is simulated, you can go beyond what metal and magnets allow.
+
+| Control | What it does |
+|---|---|
+| **Material** | Steel → glass → carbon fibre. Longer ring, stretched bell overtones and a brighter chime as you move right. Works on tines and reeds. |
+| **Pickups / Spread** | One to four magnetic pickups along the tine, summed in phase. **Spread** sets how far apart they are. The single-pickup bark gives way to a comb-like blend. Magnetic pickup only. |
+| **Gap FM / Ratio** | Swings the pickup gap and offset at an audio-rate multiple of every note's pitch (0.25× – 8×). A little adds shimmer; a lot is bell-like FM. It stays in tune because it follows the note. |
+| **Morph** | Crossfades from the selected resonator to the other one **while the note rings**: a tine becomes a reed, or the other way round. Have Morph above zero when you play the note; automate or modulate it to sweep. |
+
+The **partial map** on the right shows the resonator's overtones (height = level, brightness =
+ring time) and moves as you turn Material and Chime. It is an illustration of the model's
+settings, not a measurement.
+
+---
+
+## 10. Space: reverb, echo and cabinets
+
+![The Space page](images/editor_space.png)
+
+### Cabinet and microphone
+
+Choose a cabinet from the list. **Speaker (200A)** is the original OpenWurli speaker; the rest are
+miked cabinets:
+
+| Cabinet | Character |
+|---|---|
+| **Suitcase 4x10** | The classic Rhodes suitcase: full lows, round mids. |
+| **Twin 2x12 Open** | Open-back, clean and sparkly. |
+| **Deluxe 1x12** | Small and punchy, warm break-up. |
+| **Closed 2x12** | Tight and mid-forward. |
+| **Studio Condenser** | Wide and bright, almost flat. |
+| **Ribbon Mic** | Dark and smooth. |
+| **Hi-Fi Monitor** | Nearly neutral. |
+| **Radio** | Narrow and nasal. |
+| **Lo-Fi** | Small, crunchy and harsh. |
+
+The plot shows the cabinet's frequency response and updates as you move the controls.
+
+- **Mic Pos**: from the middle of the cone (bright, with a presence peak) to the edge (darker, with
+  a slight comb filter).
+- **Distance**: close up you get proximity bass; further away the lows relax, the highs soften with
+  air, and the room comes in.
+- **Room**: early reflections, from a dry booth to a live room.
+- **Cab Drive**: the main panel's Cabinet knob, which pushes the speaker harder.
+
+### Reverb and tape echo
+
+**Reverb** is a **Hall**, or a **Spring** tank (dispersive "boing" from two springs). **Mix** and
+**Decay** are the same knobs as on the Sound page. **Tape Echo** has the same controls plus a
+**Sync** division.
+
+---
+
+## 11. Mastering EQ and dynamics
+
+### Mastering EQ
+
+![The EQ page](images/editor_eq.png)
+
+A four-band stereo parametric equaliser at the end of the chain (after reverb), with a live
+spectrum of the output behind the curve.
+
+- **Drag the numbered points** to set a band's frequency (left–right) and gain (up–down).
+- **Scroll** over a point for its **Q** (width). **Double-click** a point to flatten that band.
+- The cards below hold the same settings as knobs. **Band 1** (low) and **Band 4** (high) can be a
+  **shelf** or a **bell**; Bands 2 and 3 are bells.
+- Each band is ±12 dB; the white line is the combined response. A band at 0 dB costs nothing.
+
+### Compressor and limiter
+
+![The Dynamics page](images/editor_dynamics.png)
+
+A stereo-linked bus compressor with every control you'd expect:
+
+| Control | |
+|---|---|
+| **Threshold** | −40 … 0 dB. |
+| **Ratio** | 1:1 … 20:1. |
+| **Attack / Release** | 0.1 – 100 ms and 10 – 1000 ms. |
+| **Knee** | 0 – 12 dB of soft knee. |
+| **Makeup** | 0 – 18 dB, plus **Auto Gain** to make up automatically. |
+| **SC HPF** | High-pass the detector (20 – 400 Hz) so bass doesn't pump the mix. |
+| **Detector** | **Peak** or **RMS**. |
+| **Mix** | Dry / compressed blend (parallel compression). **0 % = the compressor is off.** |
+
+The **transfer curve** shows the compressor's behaviour and a blue dot for the signal right now; the
+**history** scrolls the last two seconds of gain reduction.
+
+The **Output Limiter** sits after the master volume: switch it on and nothing leaves above the
+**Ceiling**.
+
+---
+
+## 12. Scope
+
+![The Scope page](images/editor_scope.png)
+
+Because the physics is real, you can watch it:
+
+- **Tine & Hammer**: the tine bends like a cantilever; the hammer rises into it, squashes its felt at
+  the moment of contact and drops away. Deflection is exaggerated to fill the view.
+- **Pickup Field**: the magnet (or several, with the Pickups macro), the field around it and the tine
+  tip moving through it, with the gap and offset in millimetres. Gap FM makes it visibly wobble. On the
+  electrostatic pickup it shows the reed swinging through the comb.
+- **Amp Saturation**: the preamp's transfer curve with a live dot for the signal level and input and
+  output peak meters. Turn **Drive** up and watch the curve bend.
+
+---
+
+## 13. Presets
 
 Click the preset name to open the browser:
 
@@ -235,14 +445,18 @@ reference position — a good place to start for an authentic 200A.
 
 ---
 
-## 9. Playing, MIDI and automation
+## 14. Playing, MIDI and automation
 
 - **Velocity** drives the hammer physically: playing harder strikes harder, which changes the
   tone, not just the level.
 - **Sustain pedal** (CC 64) and the on-screen **Sustain** switch hold notes; the dampers land
   when you release.
 - **Mod wheel** (CC 1) adds tremolo / vibrato depth.
-- **All 32 controls are automatable** from your DAW, including the three stage switches.
+- **All 101 controls are automatable** from your DAW, including the three stage switches and every
+  modulation slot. In **CLAP** hosts that support it (such as Bitwig), continuous controls also accept
+  **host parameter modulation**: an offset added to the knob without moving it.
+- **MPE**, **pitch bend**, **aftertouch** and **tempo sync** are described in
+  [section 8](#8-modulation-and-expression).
 
 ### MIDI Learn
 
@@ -258,7 +472,7 @@ Mappings are saved with your project.
 
 ---
 
-## 10. Tips for sound design
+## 15. Tips for sound design
 
 - **Bark comes from the pickup, not the amp.** For a growling Rhodes, move **Air Gap** up
   (closer) and play hard; **Voicing** decides whether the extra harmonics lean to the octave
@@ -273,12 +487,20 @@ Mappings are saved with your project.
   as cranking a real 200A does.
 - **Hybrids worth trying:** Rhodes tine → electrostatic → 200A (glassy, vocal); Wurli reed →
   magnetic → Suitcase (a reedy Rhodes with stereo pan).
+- **Morph a held chord.** Set **Morph** above zero, hold a chord and sweep it with the mod wheel
+  (Mod page: Mod Wheel → Morph) to turn Rhodes into Wurlitzer under your fingers.
+- **Let the keyboard play the tone.** Route **Velocity** to **Chime** or **Pressure** to **Air Gap**
+  in the matrix so how you play changes the timbre, not just the level.
+- **Glue with the compressor, not the volume.** Use **Mix** around 30 – 50 % with a slow attack
+  for punchy parallel compression; add a touch of **Material → Glass** for a longer ring.
+- **EQ the cab, then the mix.** Choose a cabinet and move **Mic Pos** before reaching for the EQ: the
+  cabinet already shapes the tone like a real one would.
 - **Tone bar for pads.** High **Tone Bar** and long **Decay** give a blooming, shimmering
   sustain (preset *Ambient Tine Pad*).
 
 ---
 
-## 11. Troubleshooting
+## 16. Troubleshooting
 
 | Problem | Try |
 |---|---|
@@ -287,11 +509,15 @@ Mappings are saved with your project.
 | No sound from the 200A at first | The 200A circuit settles for a moment when the plugin loads; play again after a second. |
 | Too quiet / too loud | Use **Output → Volume**. Presets are levelled to sit around −20 dBFS RMS. |
 | Changing Resonator or Pickup doesn't affect ringing notes | Those two stages are chosen when a note starts: the next note uses the new stage. Amp changes are immediate. |
+| Morph does nothing on a held note | Morph is read when a note starts: have it above zero before you play. After that you can move it freely. |
+| Choosing a cabinet doesn't seem to do anything | Make sure the Cabinet isn't set to *Speaker (200A)*; the other cabinets are always in the signal. The plot on the Space page shows what it does. |
+| The compressor isn't doing anything | Its **Mix** knob is the on switch: at 0 % it is off. |
+| Pitch bend or MPE has no effect | Turn **MPE** on for MPE controllers and set **Bend range** to match; check the host passes pitch bend and aftertouch to the plugin (VST3 hosts often don't: try CLAP or AU). |
 | Typing doesn't reach the save dialog | Some hosts keep keyboard input for themselves: click inside the editor first, or save the preset from the standalone app (macOS). |
 
 ---
 
-## 12. How it works
+## 17. How it works
 
 **Rhodes tine.** Following Falaize & Hélie's port-Hamiltonian Rhodes model (and the PyPHS
 components it is built from), the hammer is a mass with a nonlinear felt
@@ -309,13 +535,33 @@ preamp's feedback loop; the volume network; the power amp; and the speaker. The 
 checked against OpenWurli's SPICE-derived targets (preamp DC point within 0.1 mV, 15.56 dB at
 1 kHz, 880.5 Hz pickup corner, 0.37–2.28 mA LED current at 5.56 Hz).
 
+**Per-note expression.** A voice's modes are retuned in flight: the tine's stiffness values are
+recomputed from the bent pitch every few milliseconds, and the reed's modes are phasors whose
+rotation step is changed without disturbing their state, so a bend is seamless. Pressure and slide
+move the pickup gap and the coil resonance per note.
+
+**Modulation.** The matrix adds source × amount to each target's smoothed value before the voices and
+effects read it; voices re-derive what they need (modal damping, pickup geometry) when it moves.
+
+**Macros.** Material scales the tine's decay, the stretch of its bell modes and their pickup weight.
+Several pickups sum Falaize & Hélie's flux law at offset positions; Gap FM modulates the gap and
+offset with a phasor locked to the note; Morph runs a tine and a reed in the same voice, each through
+its own pickup chain, and crossfades them with equal power.
+
+**Mastering chain.** The EQ is four RBJ biquads per channel; the compressor is a stereo-linked
+feed-forward design with a quadratic soft knee and ballistics applied to the gain reduction in dB;
+the limiter has instant attack and a smooth release. The cabinets are procedural: a speaker voicing
+(high-pass, two low-pass poles, four resonant bells) followed by a microphone model (a proximity
+shelf, a presence peak, a short comb for off-axis, five early reflections). The editor draws the
+EQ and cabinet curves from the very same filters, so the curve is what you hear.
+
 **Editor.** One editor shared by all platforms. macOS draws it with CoreGraphics; Windows and
 Linux draw it with a built-in anti-aliased renderer using the Inter typeface, so it looks the
 same everywhere.
 
 ---
 
-## 13. Credits and licence
+## 18. Credits and licence
 
 - **electropiano** — Matthew Tyas (mtyas) · [mtyas.com](https://mtyas.com) ·
   [Support on Ko-fi](https://ko-fi.com/mtyas)
