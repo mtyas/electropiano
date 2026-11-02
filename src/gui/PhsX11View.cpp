@@ -8,6 +8,7 @@
 #include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -30,7 +31,34 @@ struct X11Editor {
     std::unique_ptr<phs::gui::Editor> editor;
     std::thread thread;
     std::atomic<bool> running{false};
+    int width = phs::kEditorWidth, height = phs::kEditorHeight;
+    float zoom = 1.0f;
+    std::atomic<int> pendingW{0}, pendingH{0};   // a size asked for by the host or the zoom control
+    phs::X11ResizeRequest requestResize;
 };
+
+// (Re)creates the canvas and the XImage over it for a window size; editor thread only
+bool rebuildImage(X11Editor& e, int w, int h) {
+    w = std::max(1, w);
+    h = std::max(1, h);
+    const int screen = DefaultScreen(e.dpy);
+    e.canvas.resize(w, h);
+    e.converted.assign(static_cast<size_t>(w) * h, 0);
+    if (e.image) {
+        e.image->data = nullptr; // the pixels belong to the canvas
+        XDestroyImage(e.image);
+    }
+    e.image = XCreateImage(e.dpy, DefaultVisual(e.dpy, screen), DefaultDepth(e.dpy, screen), ZPixmap, 0,
+                           reinterpret_cast<char*>(e.canvas.pixels()), w, h, 32, w * 4);
+    if (!e.image) return false;
+    const uint32_t probe = 1;
+    e.image->byte_order = (*reinterpret_cast<const uint8_t*>(&probe) == 1) ? LSBFirst : MSBFirst;
+    e.width = w;
+    e.height = h;
+    e.zoom = std::max(0.25f, std::min(w / static_cast<float>(phs::kEditorWidth), h / static_cast<float>(phs::kEditorHeight)));
+    if (e.editor) e.editor->setZoom(e.zoom);
+    return true;
+}
 
 std::mutex gEditorsMutex;
 std::map<Window, X11Editor*> gEditors;
@@ -49,7 +77,11 @@ void openUrl(const std::string& url) {
 }
 
 void present(X11Editor& e) {
-    e.editor->draw(e.canvas);
+    if (!e.image) return;
+    {
+        phs::gui::ScaledCanvas scaled(e.canvas, e.zoom);
+        e.editor->draw(scaled);
+    }
     Visual* vis = DefaultVisual(e.dpy, DefaultScreen(e.dpy));
     if (vis->red_mask != 0xFF0000 || vis->green_mask != 0x00FF00 || vis->blue_mask != 0x0000FF) {
         // Unusual visual: repack each channel into the server's masks
@@ -68,15 +100,23 @@ void present(X11Editor& e) {
         }
         e.image->data = reinterpret_cast<char*>(e.converted.data());
     }
-    XPutImage(e.dpy, e.win, e.gc, e.image, 0, 0, 0, 0, phs::kEditorWidth, phs::kEditorHeight);
+    XPutImage(e.dpy, e.win, e.gc, e.image, 0, 0, 0, 0, e.width, e.height);
     XFlush(e.dpy);
 }
 
 void eventLoop(X11Editor* e) {
     const int fd = ConnectionNumber(e->dpy);
     const float H = static_cast<float>(phs::kEditorHeight);
+    auto lx = [e](int px) { return static_cast<float>(px) / e->zoom; };
+    auto ly = [e, H](int py) { return H - static_cast<float>(py) / e->zoom; };
     bool needsPaint = true;
     while (e->running.load()) {
+        const int pw = e->pendingW.exchange(0), ph = e->pendingH.exchange(0);
+        if (pw > 0 && ph > 0) {
+            XResizeWindow(e->dpy, e->win, static_cast<unsigned>(pw), static_cast<unsigned>(ph));
+            rebuildImage(*e, pw, ph);
+            needsPaint = true;
+        }
         while (XPending(e->dpy)) {
             XEvent ev;
             XNextEvent(e->dpy, &ev);
@@ -84,8 +124,14 @@ void eventLoop(X11Editor* e) {
                 case Expose:
                     needsPaint = true;
                     break;
+                case ConfigureNotify:
+                    if (ev.xconfigure.width != e->width || ev.xconfigure.height != e->height) {
+                        rebuildImage(*e, ev.xconfigure.width, ev.xconfigure.height);
+                        needsPaint = true;
+                    }
+                    break;
                 case ButtonPress: {
-                    const float x = static_cast<float>(ev.xbutton.x), y = H - ev.xbutton.y;
+                    const float x = lx(ev.xbutton.x), y = ly(ev.xbutton.y);
                     if (ev.xbutton.button == Button1) {
                         XSetInputFocus(e->dpy, e->win, RevertToParent, CurrentTime);
                         e->editor->mouseDown(x, y, (ev.xbutton.state & ShiftMask) != 0, nowSeconds());
@@ -99,13 +145,13 @@ void eventLoop(X11Editor* e) {
                 }
                 case MotionNotify:
                     if (ev.xmotion.state & Button1Mask) {
-                        e->editor->mouseDrag(static_cast<float>(ev.xmotion.x), H - ev.xmotion.y);
+                        e->editor->mouseDrag(lx(ev.xmotion.x), ly(ev.xmotion.y));
                         needsPaint = true;
                     }
                     break;
                 case ButtonRelease:
                     if (ev.xbutton.button == Button1) {
-                        e->editor->mouseUp(static_cast<float>(ev.xbutton.x), H - ev.xbutton.y);
+                        e->editor->mouseUp(lx(ev.xbutton.x), ly(ev.xbutton.y));
                         needsPaint = true;
                     }
                     break;
@@ -137,37 +183,40 @@ void eventLoop(X11Editor* e) {
 
 namespace phs {
 
-Window createPhsX11EditorView(Window parent, PhsSynthEngine* engine, ParamChangeCallback onParamChange) {
+Window createPhsX11EditorView(Window parent, PhsSynthEngine* engine, ParamChangeCallback onParamChange,
+                              X11ResizeRequest requestResize) {
     XInitThreads();
     Display* dpy = XOpenDisplay(nullptr);
     if (!dpy) return 0;
 
     auto* e = new X11Editor();
     e->dpy = dpy;
+    e->requestResize = std::move(requestResize);
+    const float zoom = loadEditorZoom();
     const int screen = DefaultScreen(dpy);
-    e->win = XCreateSimpleWindow(dpy, parent, 0, 0, kEditorWidth, kEditorHeight, 0, BlackPixel(dpy, screen), BlackPixel(dpy, screen));
+    e->win = XCreateSimpleWindow(dpy, parent, 0, 0, scaledEditorWidth(zoom), scaledEditorHeight(zoom), 0,
+                                 BlackPixel(dpy, screen), BlackPixel(dpy, screen));
     XSelectInput(dpy, e->win, ExposureMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | KeyPressMask | StructureNotifyMask);
     e->gc = XCreateGC(dpy, e->win, 0, nullptr);
 
     gui::EditorHost host;
     host.paramChanged = std::move(onParamChange);
     host.openUrl = openUrl;
+    // The zoom control runs on the editor thread: ask the host, then resize on this thread
+    host.requestZoom = [e](float z) {
+        const int w = scaledEditorWidth(z), h = scaledEditorHeight(z);
+        if (e->requestResize && !e->requestResize(w, h)) return;
+        e->pendingW = w;
+        e->pendingH = h;
+    };
     e->editor = std::make_unique<gui::Editor>(engine, std::move(host));
-    e->canvas.resize(kEditorWidth, kEditorHeight);
-    e->converted.resize(static_cast<size_t>(kEditorWidth) * kEditorHeight);
-
-    e->image = XCreateImage(dpy, DefaultVisual(dpy, screen), DefaultDepth(dpy, screen), ZPixmap, 0,
-                            reinterpret_cast<char*>(e->canvas.pixels()), kEditorWidth, kEditorHeight, 32, kEditorWidth * 4);
-    if (!e->image) {
+    if (!rebuildImage(*e, scaledEditorWidth(zoom), scaledEditorHeight(zoom))) {
         XFreeGC(dpy, e->gc);
         XDestroyWindow(dpy, e->win);
         XCloseDisplay(dpy);
         delete e;
         return 0;
     }
-    const uint32_t probe = 1;
-    e->image->byte_order = (*reinterpret_cast<const uint8_t*>(&probe) == 1) ? LSBFirst : MSBFirst;
-
     XMapWindow(dpy, e->win);
     XFlush(dpy);
     const Window win = e->win;
@@ -178,6 +227,14 @@ Window createPhsX11EditorView(Window parent, PhsSynthEngine* engine, ParamChange
     e->running = true;
     e->thread = std::thread(eventLoop, e); // from here on only the editor thread uses dpy
     return win;
+}
+
+void setPhsX11EditorSize(Window win, int width, int height) {
+    std::lock_guard<std::mutex> lock(gEditorsMutex);
+    auto it = gEditors.find(win);
+    if (it == gEditors.end()) return;
+    it->second->pendingW = width;
+    it->second->pendingH = height;
 }
 
 void destroyPhsX11EditorView(Window win) {

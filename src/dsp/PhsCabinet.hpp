@@ -43,6 +43,7 @@ public:
         fs_ = fs;
         combBuf_.assign(256, 0.0f);
         roomBuf_.assign(static_cast<size_t>(0.060f * fs) + 8, 0.0f);
+        for (int t = 0; t < kRoomTaps; ++t) roomTapDelay_[t] = static_cast<int>(kRoomTapSec[t] * fs_);
         reset();
         key_ = -1.0f;
     }
@@ -75,21 +76,26 @@ public:
         for (auto& b : bq_) v = b.process(v);
         float y = static_cast<float>(v);
         // Mic off the cone axis: a short comb from the path difference between cone centre and edge
+        const int cn = static_cast<int>(combBuf_.size());
         combBuf_[combIdx_] = y;
-        const int ci = (combIdx_ - combDelay_ + static_cast<int>(combBuf_.size())) % static_cast<int>(combBuf_.size());
+        int ci = combIdx_ - combDelay_;
+        if (ci < 0) ci += cn;
         y += combGain_ * combBuf_[ci];
-        combIdx_ = (combIdx_ + 1) % static_cast<int>(combBuf_.size());
+        if (++combIdx_ >= cn) combIdx_ = 0;
         // Room: five early reflections through a one-pole low-pass
         if (roomGain_ > 0.002f) {
             roomBuf_[roomIdx_] = y;
-            static const float taps[5] = {0.0063f, 0.0111f, 0.0179f, 0.0260f, 0.0377f};
-            static const float gains[5] = {0.50f, 0.40f, 0.33f, 0.25f, 0.18f};
+            static const float gains[kRoomTaps] = {0.50f, 0.40f, 0.33f, 0.25f, 0.18f};
             float acc = 0.0f;
             const int n = static_cast<int>(roomBuf_.size());
-            for (int t = 0; t < 5; ++t) acc += gains[t] * roomBuf_[(roomIdx_ - static_cast<int>(taps[t] * fs_) + n) % n];
+            for (int t = 0; t < kRoomTaps; ++t) {
+                int ri = roomIdx_ - roomTapDelay_[t];
+                if (ri < 0) ri += n;
+                acc += gains[t] * roomBuf_[ri];
+            }
             roomLp_ += 0.35f * (acc - roomLp_);
             y += roomGain_ * roomLp_;
-            roomIdx_ = (roomIdx_ + 1) % n;
+            if (++roomIdx_ >= n) roomIdx_ = 0;
         }
         return y;
     }
@@ -109,6 +115,8 @@ public:
 
 private:
     static constexpr int kBiquads = 9;
+    static constexpr int kRoomTaps = 5;
+    static constexpr float kRoomTapSec[kRoomTaps] = {0.0063f, 0.0111f, 0.0179f, 0.0260f, 0.0377f};
     struct Comb { float delayMs = 0.1f, gain = 0.0f; };
 
     static void design(int type, float mic, float dist, wurli::Biquad* bq, float fs, Comb& comb) {
@@ -130,7 +138,7 @@ private:
     float fs_ = 48000.0f, key_ = -1.0f, drive_ = 0.0f, driveExtra_ = 0.0f, roomGain_ = 0.0f, roomAmount_ = 0.0f;
     wurli::Biquad bq_[kBiquads];
     Comb comb_;
-    int combDelay_ = 1, combIdx_ = 0, roomIdx_ = 0;
+    int combDelay_ = 1, combIdx_ = 0, roomIdx_ = 0, roomTapDelay_[kRoomTaps]{};
     float combGain_ = 0.0f, roomLp_ = 0.0f;
     std::vector<float> combBuf_, roomBuf_;
 };

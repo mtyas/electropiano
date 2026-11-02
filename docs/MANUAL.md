@@ -1,6 +1,6 @@
 # electropiano — User Manual
 
-**Version 0.79** · by Matthew Tyas (mtyas) · GPL-3.0
+**Version 0.81** · by Matthew Tyas (mtyas) · GPL-3.0
 
 ![electropiano with a Rhodes Mk I preset and a chord held](images/editor_sound.png)
 
@@ -41,6 +41,7 @@ pickup field and the amp saturating in real time.
 10. [Space: reverb, echo and cabinets](#10-space-reverb-echo-and-cabinets)
 11. [Mastering EQ and dynamics](#11-mastering-eq-and-dynamics)
 12. [Scope](#12-scope)
+12b. [Play: tuning, pedals and realism](#12b-play-tuning-pedals-and-realism)
 13. [Presets](#13-presets)
 14. [Playing, MIDI and automation](#14-playing-midi-and-automation)
 15. [Tips for sound design](#15-tips-for-sound-design)
@@ -57,9 +58,9 @@ Download the archive for your system from the
 
 | System | Formats | Where to put them |
 |---|---|---|
-| **macOS** (Apple Silicon and Intel) | `electropiano.clap`, `electropiano.vst3`, `electropiano.component` (Audio Unit), `electropiano.app` (standalone) | `~/Library/Audio/Plug-Ins/CLAP/`, `~/Library/Audio/Plug-Ins/VST3/`, `~/Library/Audio/Plug-Ins/Components/`, and the app anywhere you like |
-| **Windows** (64-bit) | `electropiano.clap`, `electropiano.vst3` | `C:\Program Files\Common Files\CLAP\` and `C:\Program Files\Common Files\VST3\` |
-| **Linux** (64-bit, X11) | `electropiano.clap`, `electropiano.vst3` | `~/.clap/` and `~/.vst3/` |
+| **macOS** (Apple Silicon and Intel) | `electropiano.clap`, `electropiano.vst3`, `electropiano.component` (Audio Unit), `electropiano.lv2`, `electropiano.app` (standalone) | `~/Library/Audio/Plug-Ins/CLAP/`, `~/Library/Audio/Plug-Ins/VST3/`, `~/Library/Audio/Plug-Ins/Components/`, `~/Library/Audio/Plug-Ins/LV2/`, and the app anywhere you like |
+| **Windows** (64-bit) | `electropiano.clap`, `electropiano.vst3`, `electropiano.lv2` | `C:\Program Files\Common Files\CLAP\`, `C:\Program Files\Common Files\VST3\` and `%APPDATA%\LV2\` |
+| **Linux** (64-bit, X11) | `electropiano.clap`, `electropiano.vst3`, `electropiano.lv2` | `~/.clap/`, `~/.vst3/` and `~/.lv2/` |
 
 Then rescan plugins in your DAW.
 
@@ -70,7 +71,9 @@ the download quarantine flag once, in Terminal:
 xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/CLAP/electropiano.clap ~/Library/Audio/Plug-Ins/VST3/electropiano.vst3 ~/Library/Audio/Plug-Ins/Components/electropiano.component
 ```
 
-The window is 900 × 776 pixels and looks the same on all three systems:
+The window is 900 × 776 pixels at 100 % and looks the same on all three systems. It can be
+**resized**: drag the window's corner in hosts that allow it (CLAP, VST3, the standalone app), or
+set **Zoom** (75 – 200 %) on the Play page; the zoom is remembered.
 
 ![The same editor drawn by the Windows / Linux renderer](images/editor_windows_linux.png)
 
@@ -103,10 +106,10 @@ names and controls to match what you select.
 
 ![The page bar](images/editor_sound.png)
 
-Under the signal chain a **page bar** switches the middle of the window between seven pages.
-The header, signal chain, keyboard and the live **output meters** (peak L / R and the
-compressor's gain reduction, at the right of the bar) stay on screen on every page, so you can
-play and change presets while you edit.
+Under the signal chain a **page bar** switches the middle of the window between eight pages.
+The header, signal chain, keyboard and the live read-outs at the right of the bar stay on screen
+on every page: **CPU** (the share of the real-time budget the plugin is using), voices in use out
+of the polyphony, the **output meters** (peak L / R) and the compressor's gain reduction.
 
 | Page | What it holds |
 |---|---|
@@ -117,6 +120,7 @@ play and change presets while you edit.
 | **EQ** | A four-band parametric mastering equaliser with an interactive curve and live spectrum. |
 | **Dynamics** | Compressor and output limiter, with transfer curve and gain-reduction history. |
 | **Scope** | The tine and hammer, the pickup field and the amp's saturation, live. |
+| **Play** | Tuning and microtuning (Scala), transpose, polyphony, condition, sympathetic resonance, key spread, A/B compare and zoom. |
 
 ### Knobs
 
@@ -351,9 +355,18 @@ The plot shows the cabinet's frequency response and updates as you move the cont
 
 ### Reverb and tape echo
 
-**Reverb** is a **Hall**, or a **Spring** tank (dispersive "boing" from two springs). **Mix** and
-**Decay** are the same knobs as on the Sound page. **Tape Echo** has the same controls plus a
-**Sync** division.
+**Reverb** has four types:
+
+- **Studio Hall** (the default): an eight-line feedback delay network, true stereo, with a darker
+  tail as Decay comes down and slow modulation that keeps it from ringing metallically.
+- **Plate**: the classic plate topology published by Jon Dattorro: dense, bright and smooth.
+- **Spring**: a dispersive spring tank (the "boing" of two springs).
+- **Classic Hall**: the hall of earlier versions (projects saved with them keep it).
+
+**Mix** and **Decay** are the same knobs as on the Sound page; **Pre-Delay** (0 – 120 ms) holds the
+reverb back so the attack stays clear. **Tape Echo** has the same controls plus a **Sync** division.
+**Chorus** is a *Tri* chorus (three bucket-brigade taps sweeping 120° apart, left / centre / right,
+through the BBD's low-pass) or the earlier *Dual* two-tap chorus.
 
 ---
 
@@ -413,6 +426,43 @@ Because the physics is real, you can watch it:
 
 ---
 
+## 12b. Play: tuning, pedals and realism
+
+![The Play page](images/editor_play.png)
+
+### Tuning and microtuning
+
+- **Tune** sets concert pitch (A4 = 415 – 466 Hz); **Transpose** moves the keyboard ±24 semitones.
+- **Scale** chooses a tuning: 12-TET, built-in just intonation, Pythagorean, quarter-comma meantone,
+  Werckmeister III, 19-, 24- and 31-EDO, and every **Scala** file (`.scl`) in your Tunings folder.
+  A `.kbm` keyboard mapping with the same name is used with its scale (keys it leaves unmapped stay
+  silent). **Load .scl…** opens a file and copies it to the Tunings folder; **Tunings Folder** opens it.
+- The chart shows how far each note of one octave sits from equal temperament.
+- With no `.kbm`, scale degree 0 is middle C and A4 is at the Tune frequency.
+- **MIDI Tuning Standard** SysEx (single-note and scale/octave tuning) retunes the instrument too.
+- The tuning is **saved with your project**, so it plays back the same on a machine without the file.
+
+The Tunings folder is next to the Presets folder (for example
+`~/Library/Application Support/mtyas/electropiano/Tunings` on macOS).
+
+### Playing and realism
+
+- **Polyphony**: 8 – 64 voices. When it runs out, the quietest voice is taken, with a short fade.
+- **Condition**: each key gets its own small differences, as on a real, played instrument: tuning a
+  few cents off, uneven voicing, decay and hammer wear. The same key is always the same. 0 % is a
+  factory-perfect instrument.
+- **Sympathetic**: with the sustain pedal down, the undamped tines ring along with what you play,
+  each at its own (tuned) pitch.
+- **Key Spread**: low keys to the left, high keys to the right.
+
+### Editor and comparing
+
+- **Zoom** 75 – 200 % (see [Installing](#1-installing)).
+- **A / B** keeps two versions of your sound: edit, switch to B, edit again and switch back to compare.
+  **Copy A to B** (or B to A) starts the other side from the current sound.
+
+---
+
 ## 13. Presets
 
 Click the preset name to open the browser:
@@ -420,6 +470,9 @@ Click the preset name to open the browser:
 ![Preset browser](images/dialog_presets.png)
 
 - Filter by category with the tabs; **scroll** for more; click a preset to load it.
+- **Type** to search names and descriptions (**Enter** loads the first match, **Esc** clears).
+- Click the **star** next to a preset to make it a favourite; the **Favourites** tab lists them.
+- The line under the list describes the selected preset.
 - **Save Preset…** stores the current sound as a user preset. Type a name and press
   **Enter** (or **Save**); **Esc** cancels.
 
@@ -450,9 +503,16 @@ reference position — a good place to start for an authentic 200A.
 - **Velocity** drives the hammer physically: playing harder strikes harder, which changes the
   tone, not just the level.
 - **Sustain pedal** (CC 64) and the on-screen **Sustain** switch hold notes; the dampers land
-  when you release.
+  when you release. A continuous pedal **half-pedals**: part-way down, the dampers only graze the
+  tines and the notes die away slowly. **Sostenuto** (CC 66) holds just the notes whose keys are
+  down when you press it; the **soft pedal** (CC 67) makes notes struck while it is down softer and
+  rounder. **Release velocity** (how fast you let go of a key) sets how fast the damper lands.
+- **Repeated notes** strike the tine that is still ringing, as on the instrument, so fast repeats
+  build on each other instead of restarting.
+- **Notes are placed at the exact sample** the host sends them in every format, so timing doesn't
+  depend on the buffer size.
 - **Mod wheel** (CC 1) adds tremolo / vibrato depth.
-- **All 101 controls are automatable** from your DAW, including the three stage switches and every
+- **All 109 controls are automatable** from your DAW, including the three stage switches and every
   modulation slot. In **CLAP** hosts that support it (such as Bitwig), continuous controls also accept
   **host parameter modulation**: an offset added to the knob without moving it.
 - **MPE**, **pitch bend**, **aftertouch** and **tempo sync** are described in
@@ -513,6 +573,8 @@ Mappings are saved with your project.
 | Choosing a cabinet doesn't seem to do anything | Make sure the Cabinet isn't set to *Speaker (200A)*; the other cabinets are always in the signal. The plot on the Space page shows what it does. |
 | The compressor isn't doing anything | Its **Mix** knob is the on switch: at 0 % it is off. |
 | Pitch bend or MPE has no effect | Turn **MPE** on for MPE controllers and set **Bend range** to match; check the host passes pitch bend and aftertouch to the plugin (VST3 hosts often don't: try CLAP or AU). |
+| A loaded Scala file sounds wrong | Without a `.kbm`, degree 0 is middle C and A4 sits at the Tune frequency; add a `.kbm` with the same name to map it differently. Keys a `.kbm` marks `x` are silent. |
+| The editor is too small or too large | Set **Zoom** on the Play page, or drag the window corner where the host allows it. |
 | Typing doesn't reach the save dialog | Some hosts keep keyboard input for themselves: click inside the editor first, or save the preset from the standalone app (macOS). |
 
 ---

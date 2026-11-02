@@ -96,8 +96,10 @@ inline bool solveInPlace(Mat<N> a, Vec<N>& b) {
         int best = col;
         for (int r = col + 1; r < N; ++r) if (std::fabs(a[r][col]) > std::fabs(a[best][col])) best = r;
         if (std::fabs(a[best][col]) < 1e-300) return false;
-        std::swap(a[col], a[best]);
-        std::swap(b[col], b[best]);
+        if (best != col) {
+            std::swap(a[col], a[best]);
+            std::swap(b[col], b[best]);
+        }
         for (int r = col + 1; r < N; ++r) {
             const double f = a[r][col] / a[col][col];
             if (f == 0.0) continue;
@@ -514,6 +516,11 @@ public:
         attack_ = std::exp(-1.0 / (0.0025 * fs));
         release_ = std::exp(-1.0 / (0.035 * fs));
         for (int k = 0; k < kLutN; ++k) lut_[k] = std::clamp(ledIntensity(kLedIFullMa * k / (kLutN - 1.0)), 0.0, 1.0);
+        // LDR law R = exp(ln Rmax + (ln Rmin - ln Rmax) d^gamma), tabulated over the light level d
+        for (int k = 0; k < kLdrLutN; ++k) {
+            const double d = static_cast<double>(k) / (kLdrLutN - 1);
+            ldrLut_[k] = k == 0 ? kRLdrMax : std::exp(kLnRMax + kLnMinMinusMax * std::pow(d, kGamma));
+        }
         setRateScale(rateScale_);
         reset();
     }
@@ -539,6 +546,9 @@ public:
 
     // Returns the shunt impedance seen by the preamp's feedback junction
     double process() {
+        // With the depth pot at zero the LDR is out of circuit (shuntImpedance ignores it), so
+        // the oscillator pauses instead of being solved for nothing; it resumes where it stopped
+        if (depth_ <= 0.0) return shuntImpedance();
         if (phase_ == 0) {
             lightPrev_ = lightNow_;
             osc_.step();
@@ -551,7 +561,13 @@ public:
         const double coeff = drive > envelope_ ? attack_ : release_;
         envelope_ = drive + coeff * (envelope_ - drive);
         const double d = std::clamp(envelope_, 0.0, 1.0);
-        rLdr_ = d < 1e-6 ? kRLdrMax : std::exp(kLnRMax + kLnMinMinusMax * std::pow(d, kGamma));
+        if (d < 1e-6) {
+            rLdr_ = kRLdrMax;
+        } else {
+            const double x = d * (kLdrLutN - 1);
+            const int k = std::min(static_cast<int>(x), kLdrLutN - 2);
+            rLdr_ = ldrLut_[k] + (x - k) * (ldrLut_[k + 1] - ldrLut_[k]);
+        }
         return shuntImpedance();
     }
 
@@ -564,6 +580,7 @@ private:
     static constexpr double kRVibBridge = 18000.0, kRVibPot = 50000.0;
     static constexpr double kLedIFullMa = 2.279;
     static constexpr int kLutN = 256;
+    static constexpr int kLdrLutN = 2048;
     static inline const double kLnRMax = std::log(kRLdrMax);
     static inline const double kLnMinMinusMax = std::log(kRLdrMin) - std::log(kRLdrMax);
 
@@ -603,6 +620,7 @@ private:
 
     TwinTOscillator osc_;
     std::array<double, kLutN> lut_{};
+    std::array<double, kLdrLutN> ldrLut_{};
     double fs_ = 96000.0, rateScale_ = 1.0, depth_ = 0.5;
     int decim_ = 16, phase_ = 0;
     double lightPrev_ = 0.0, lightNow_ = 0.0;
@@ -742,6 +760,7 @@ public:
         rampSamples_ = std::max(1, static_cast<int>(fs * 0.005));
         volume_.snap(0.8); depth_.snap(0.5); character_.snap(0.0);
         c9_ = 0.0;
+        cachedVol_ = -1.0;
         alignment_ = std::pow(10.0, kOutputAlignmentDb / 20.0);
         // Warm-up as upstream: let couplings settle before the first note
         for (int i = 0; i < static_cast<int>(fs * 0.6); ++i) process(0.0);
@@ -766,10 +785,15 @@ public:
         const double depth = depth_.next();
         const double vol = volume_.next();
         tremolo_.setDepth(depth);
-        double gain, poleHz;
-        volumeNetwork(vol, kR11ReedBarDefault, gain, poleHz);
-        const double driveGain = preamp_.openCircuitOutputFactor() * gain;
-        const double c9Alpha = poleHz >= 0.5 * osFs_ ? 1.0 : 1.0 - std::exp(-kTau * poleHz / osFs_);
+        if (vol != cachedVol_) {
+            // The volume network only changes while the pot moves
+            cachedVol_ = vol;
+            double gain, poleHz;
+            volumeNetwork(vol, kR11ReedBarDefault, gain, poleHz);
+            driveGain_ = preamp_.openCircuitOutputFactor() * gain;
+            c9Alpha_ = poleHz >= 0.5 * osFs_ ? 1.0 : 1.0 - std::exp(-kTau * poleHz / osFs_);
+        }
+        const double driveGain = driveGain_, c9Alpha = c9Alpha_;
 
         double y;
         if (oversample_) {
@@ -819,6 +843,7 @@ private:
     Oversampler oversampler_;
     Smoother volume_, depth_, character_;
     double fs_ = 48000.0, osFs_ = 96000.0, c9_ = 0.0, alignment_ = 1.0;
+    double cachedVol_ = -1.0, driveGain_ = 0.0, c9Alpha_ = 1.0;
     bool oversample_ = true;
     int rampSamples_ = 240;
 };

@@ -132,32 +132,43 @@ public:
     }
     void glowCircle(float cx, float cy, float radius, float blur, Color c) override { shadowCircle(cx, cy, radius, blur, 0.0f, c); }
 
+    // Sizes the atlas does not hold (a scaled editor) are drawn from the nearest face of the same
+    // weight, resampled
     float textWidth(const std::string& s, const TextStyle& st) override {
-        const auto* face = faceFor(st);
+        float ratio;
+        const auto* face = faceFor(st, ratio);
         float w = 0.0f;
         int n = 0;
         for (size_t i = 0; i < s.size();) {
             const uint32_t cp = nextCodepoint(s, i);
-            if (const auto* g = glyphFor(face, cp)) w += g->advance;
+            if (const auto* g = glyphFor(face, cp)) w += g->advance * ratio;
             ++n;
         }
         return w + st.kern * std::max(0, n - 1);
     }
     float lineHeight(const TextStyle& st) override {
-        const auto* f = faceFor(st);
-        return std::ceil(f->ascent + f->descent);
+        float ratio;
+        const auto* f = faceFor(st, ratio);
+        return std::ceil((f->ascent + f->descent) * ratio);
     }
     void drawText(const std::string& s, float x, float y, const TextStyle& st, Color c) override {
-        const auto* face = faceFor(st);
-        const float baseline = static_cast<float>(h_) - (y + face->descent); // device y of the baseline
+        float ratio;
+        const auto* face = faceFor(st, ratio);
+        const float baseline = static_cast<float>(h_) - (y + face->descent * ratio); // device y of the baseline
         float pen = x;
         for (size_t i = 0; i < s.size();) {
             const uint32_t cp = nextCodepoint(s, i);
             const auto* g = glyphFor(face, cp);
             if (!g) continue;
-            if (g->w > 0) blitGlyph(face, *g, static_cast<int>(std::lround(pen)) + g->left,
-                                    static_cast<int>(std::lround(baseline)) - g->top, c);
-            pen += g->advance + st.kern;
+            if (g->w > 0) {
+                if (ratio == 1.0f) {
+                    blitGlyph(face, *g, static_cast<int>(std::lround(pen)) + g->left,
+                              static_cast<int>(std::lround(baseline)) - g->top, c);
+                } else {
+                    blitGlyphScaled(face, *g, pen + g->left * ratio, baseline - g->top * ratio, ratio, c);
+                }
+            }
+            pen += g->advance * ratio + st.kern;
         }
     }
 
@@ -223,7 +234,8 @@ private:
         }
     }
 
-    static const fontatlas::Face* faceFor(const TextStyle& st) {
+    // The face to draw a style with, and the scale from that face to the style's size
+    static const fontatlas::Face* faceFor(const TextStyle& st, float& ratio) {
         const fontatlas::Face* best = &fontatlas::kFaces[0];
         float bestScore = 1e9f;
         for (int i = 0; i < fontatlas::kNumFaces; ++i) {
@@ -231,7 +243,46 @@ private:
             const float score = std::fabs(f.size - st.size) * 4.0f + std::abs(f.weight - static_cast<int>(st.weight));
             if (score < bestScore) { bestScore = score; best = &f; }
         }
-        return best;
+        if (std::fabs(best->size - st.size) < 0.26f) { ratio = 1.0f; return best; }
+        // Not in the atlas: the largest face of the right weight at or below the size (or the
+        // nearest one), magnified; downsampling a larger face keeps strokes even
+        const fontatlas::Face* pick = nullptr;
+        for (int i = 0; i < fontatlas::kNumFaces; ++i) {
+            const auto& f = fontatlas::kFaces[i];
+            if (f.weight != static_cast<int>(st.weight)) continue;
+            if (!pick || std::fabs(f.size - st.size) < std::fabs(pick->size - st.size)) pick = &f;
+        }
+        if (!pick) pick = best;
+        ratio = st.size / pick->size;
+        return pick;
+    }
+
+    void blitGlyphScaled(const fontatlas::Face* face, const fontatlas::Glyph& g, float ox, float oy, float ratio, Color c) {
+        const uint8_t* src = face->pixels + g.offset;
+        const int w = static_cast<int>(std::ceil(g.w * ratio)) + 1, h = static_cast<int>(std::ceil(g.h * ratio)) + 1;
+        const int x0 = static_cast<int>(std::floor(ox)), y0 = static_cast<int>(std::floor(oy));
+        auto at = [&](int i, int j) -> float {
+            if (i < 0 || j < 0 || i >= g.w || j >= g.h) return 0.0f;
+            return src[j * g.w + i] / 255.0f;
+        };
+        for (int j = 0; j < h; ++j) {
+            const int dy = y0 + j;
+            if (dy < state_.clip.y0 || dy >= state_.clip.y1) continue;
+            uint32_t* row = pixels_.data() + static_cast<size_t>(dy) * w_;
+            const float sy = (dy + 0.5f - oy) / ratio - 0.5f;
+            const int iy = static_cast<int>(std::floor(sy));
+            const float fy = sy - iy;
+            for (int i = 0; i < w; ++i) {
+                const int dx = x0 + i;
+                if (dx < state_.clip.x0 || dx >= state_.clip.x1) continue;
+                const float sx = (dx + 0.5f - ox) / ratio - 0.5f;
+                const int ix = static_cast<int>(std::floor(sx));
+                const float fx = sx - ix;
+                const float a = (at(ix, iy) * (1 - fx) + at(ix + 1, iy) * fx) * (1 - fy) +
+                                (at(ix, iy + 1) * (1 - fx) + at(ix + 1, iy + 1) * fx) * fy;
+                if (a > 0.003f) blend(row[dx], c, a * c.a * state_.alpha);
+            }
+        }
     }
     static const fontatlas::Glyph* glyphFor(const fontatlas::Face* f, uint32_t cp) {
         for (int i = 0; i < f->numGlyphs; ++i) if (f->glyphs[i].cp == cp) return &f->glyphs[i];

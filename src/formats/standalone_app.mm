@@ -42,6 +42,14 @@ static void coreMidiReadProc(const MIDIPacketList *pktlist, void *readProcRefCon
         while (idx < len) {
             const uint8_t status = packet->data[idx];
             const uint8_t kind = status & 0xF0;
+            if (status == 0xF0) {
+                // SysEx within this packet (MIDI Tuning Standard retunes the instrument)
+                UInt16 end = idx + 1;
+                while (end < len && packet->data[end] != 0xF7) ++end;
+                if (end < len) ctx->engine.handleSysEx(packet->data + idx, static_cast<size_t>(end - idx + 1));
+                idx = end + 1;
+                continue;
+            }
             if ((status & 0x80) == 0 || kind == 0xF0) {
                 ++idx; // data byte without a status, or a system message
                 continue;
@@ -134,17 +142,27 @@ static void coreMidiReadProc(const MIDIPacketList *pktlist, void *readProcRefCon
     }
 
     // 3. Create Main Window & Embed Cocoa Editor View
-    NSRect winRect = NSMakeRect(0, 0, phs::kEditorWidth, phs::kEditorHeight);
-    NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable;
+    const float zoom = phs::loadEditorZoom();
+    NSRect winRect = NSMakeRect(0, 0, phs::scaledEditorWidth(zoom), phs::scaledEditorHeight(zoom));
+    NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
+                              NSWindowStyleMaskResizable;
     window_ = [[NSWindow alloc] initWithContentRect:winRect
                                           styleMask:style
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
     [window_ setTitle:@"electropiano by mtyas — Port-Hamiltonian Rhodes & Wurlitzer"];
+    // Resizable at the editor's aspect ratio; the view scales with the window
+    [window_ setContentAspectRatio:NSMakeSize(phs::kEditorWidth, phs::kEditorHeight)];
+    [window_ setContentMinSize:NSMakeSize(phs::kEditorWidth * 0.5, phs::kEditorHeight * 0.5)];
     [window_ center];
     [window_ setDelegate:self];
 
-    editorView_ = phs::createPhsEditorView(&ctx_.engine, nullptr);
+    NSWindow *win = window_;
+    editorView_ = phs::createPhsEditorView(&ctx_.engine, nullptr, [win](int w, int h) {
+        [win setContentSize:NSMakeSize(w, h)];
+        return true;
+    });
+    [editorView_ setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     [[window_ contentView] addSubview:editorView_];
     [window_ makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];

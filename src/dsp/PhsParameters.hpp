@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PhsVersion.hpp"
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -91,6 +92,16 @@ enum ParamID : uint32_t {
     kParamCabDistance,         // Mic distance: proximity bass boost fades, air and room come in
     kParamCabRoom,             // Room reflections
 
+    // --- v1.7: tuning, playing, realism and space ---
+    kParamMasterTune,          // Concert pitch: A4 = 415 .. 466 Hz
+    kParamTranspose,           // -24 .. +24 semitones
+    kParamPolyphony,           // Voices: 8, 12, 16, 24, 32, 48, 64
+    kParamSympathetic,         // Sympathetic resonance of the undamped tines / reeds (pedal down)
+    kParamCondition,           // Per-key variation: tuning, voicing, decay, hammer wear (0 = factory-perfect)
+    kParamStereoSpread,        // Keyboard spread across the stereo field
+    kParamReverbPreDelay,      // Reverb pre-delay (0 .. 120 ms)
+    kParamChorusMode,          // 0 Dual (two BBD taps), 1 Tri-chorus (three taps, 120 degrees apart)
+
     kNumParams
 };
 
@@ -106,6 +117,7 @@ static constexpr uint32_t kNumParamsV2 = 23;
 static constexpr uint32_t kNumParamsV3 = 32;
 static constexpr uint32_t kNumParamsV4 = 64;
 static constexpr uint32_t kNumParamsV5 = 75;
+static constexpr uint32_t kNumParamsV6 = 101;
 static constexpr int kNumModSlots = 6;
 static constexpr uint32_t kFirstModSlotParam = kParamMod1Src;
 
@@ -190,7 +202,7 @@ static constexpr std::array<ParamInfo, kNumParams> kParamMetadata = {{
     {kParamGapFmDepth,       "Gap FM",         "GapFM",    "%",   "Macros",     0.00f, 0},
     {kParamGapFmRatio,       "Gap FM Ratio",   "FMRatio",  "x",   "Macros",     0.35f, 0},
     {kParamResMorph,         "Morph",          "Morph",    "%",   "Macros",     0.00f, 0},
-    {kParamReverbType,       "Reverb Type",    "RevType",  "",    "Effects",    0.00f, 1},
+    {kParamReverbType,       "Reverb Type",    "RevType",  "",    "Effects",    2.0f / 3.0f, 3},
     {kParamCabType,          "Cabinet Type",   "CabType",  "",    "Amp",        0.00f, 9},
     {kParamEqFreq,           "EQ HiMid Freq",  "EQ3Freq",  "Hz",  "Mastering EQ", 0.50f, 0},
     {kParamEqGain,           "EQ HiMid Gain",  "EQ3Gain",  "dB",  "Mastering EQ", 0.50f, 0},
@@ -221,7 +233,36 @@ static constexpr std::array<ParamInfo, kNumParams> kParamMetadata = {{
     {kParamCabMic,           "Mic Position",   "MicPos",   "%",   "Amp",        0.25f, 0},
     {kParamCabDistance,      "Mic Distance",   "MicDist",  "%",   "Amp",        0.30f, 0},
     {kParamCabRoom,          "Room",           "Room",     "%",   "Amp",        0.20f, 0},
+    {kParamMasterTune,       "Master Tune",    "Tune",     "Hz",  "Output",     25.0f / 51.0f, 0},
+    {kParamTranspose,        "Transpose",      "Transp",   "st",  "Output",     0.5f,  48},
+    {kParamPolyphony,        "Polyphony",      "Voices",   "",    "Output",     4.0f / 6.0f, 6},
+    {kParamSympathetic,      "Sympathetic",    "Sympath",  "%",   "Resonator",  0.20f, 0},
+    {kParamCondition,        "Condition",      "Cond",     "%",   "Resonator",  0.20f, 0},
+    {kParamStereoSpread,     "Key Spread",     "KSpread",  "%",   "Output",     0.00f, 0},
+    {kParamReverbPreDelay,   "Pre-Delay",      "PreDly",   "ms",  "Effects",    0.10f, 0},
+    {kParamChorusMode,       "Chorus Mode",    "ChMode",   "",    "Effects",    1.00f, 1},
 }};
+
+// Values that reproduce the previous version's sound exactly: a state or preset saved before a
+// parameter existed loads with these rather than with the new defaults
+inline float legacyValue(uint32_t id) {
+    switch (id) {
+        case kParamSympathetic: case kParamCondition: case kParamStereoSpread:
+        case kParamReverbPreDelay: case kParamChorusMode: return 0.0f;
+        default: return kParamMetadata[id].defaultValue;
+    }
+}
+
+// Brings parameter values saved with `stored` parameters up to the current layout (in place):
+// parameters that did not exist take their legacy value, and choices that grew are remapped
+inline void migrateParams(float* v, uint32_t stored) {
+    for (uint32_t i = stored; i < kNumParams; ++i) v[i] = legacyValue(i);
+    if (stored > kParamReverbType && stored <= kNumParamsV6) {
+        // Reverb Type was Hall / Spring; it is now Classic Hall / Spring / Studio Hall / Plate
+        const int oldIdx = std::clamp(static_cast<int>(std::lround(v[kParamReverbType])), 0, 1);
+        v[kParamReverbType] = static_cast<float>(oldIdx) / 3.0f;
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Value mappings shared by the DSP and every display, so they cannot disagree
@@ -268,6 +309,14 @@ inline float compKneeDb(float n) { return 12.0f * n; }
 inline float compMakeupDb(float n) { return 18.0f * n; }
 inline float compHpfHz(float n) { return 20.0f * std::pow(20.0f, n); }                   // 20 .. 400 Hz
 inline float limCeilDb(float n) { return -12.0f + 12.0f * n; }
+
+// ---- v1.7 mappings -----------------------------------------------------------
+inline float masterTuneHz(float n) { return 415.0f + 51.0f * n; }                       // A4
+inline int transposeSemis(float n) { return stepIndex(n, 48) - 24; }
+inline int polyphonyVoices(float n) { static const int v[7] = {8, 12, 16, 24, 32, 48, 64}; return v[stepIndex(n, 6)]; }
+inline float preDelayMs(float n) { return 120.0f * n; }
+enum ReverbAlgo { kRevClassicHall = 0, kRevSpring, kRevStudioHall, kRevPlate };
+inline int reverbAlgo(float n) { return stepIndex(n, 3); }
 
 // Inverse of eqBandFreqHz: the normalised value that puts band `band` at f Hz (the editor drags nodes with it)
 inline float eqBandFreqNorm(int band, float f) {
@@ -374,7 +423,16 @@ inline void formatParamDisplay(uint32_t id, float n, char* out, size_t size) {
         case kParamCompDetect: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "RMS" : "Peak"); return;
         case kParamCompAuto: case kParamLimOn: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "On" : "Off"); return;
         case kParamLimCeil: std::snprintf(out, size, "%.1f dB", limCeilDb(n)); return;
-        case kParamReverbType: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Spring" : "Hall"); return;
+        case kParamReverbType: {
+            static const char* r[4] = {"Classic Hall", "Spring", "Studio Hall", "Plate"};
+            std::snprintf(out, size, "%s", r[reverbAlgo(n)]);
+            return;
+        }
+        case kParamMasterTune: std::snprintf(out, size, "%.1f Hz", masterTuneHz(n)); return;
+        case kParamTranspose: std::snprintf(out, size, "%+d st", transposeSemis(n)); return;
+        case kParamPolyphony: std::snprintf(out, size, "%d", polyphonyVoices(n)); return;
+        case kParamReverbPreDelay: std::snprintf(out, size, "%.0f ms", preDelayMs(n)); return;
+        case kParamChorusMode: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Tri" : "Dual"); return;
         case kParamCabType: {
             static const char* c[10] = {"Speaker (200A)", "Suitcase 4x10", "Twin 2x12 Open", "Deluxe 1x12", "Closed 2x12",
                                         "Studio Condenser", "Ribbon Mic", "Hi-Fi Monitor", "Radio", "Lo-Fi"};

@@ -60,7 +60,7 @@ namespace {
 static const UInt32 kAuType         = 'aumu';
 static const UInt32 kAuSubType      = 'PhsE';
 static const UInt32 kAuManufacturer = 'PyPH';
-static const UInt32 kAuVersion      = 0x00004F00; // v0.79
+static const UInt32 kAuVersion      = (PHS_VERSION_MAJOR << 16) | (PHS_VERSION_MINOR << 8);
 
 struct PropListener {
     AudioUnitPropertyID id;
@@ -87,6 +87,13 @@ struct PhsAudioUnit {
 
     std::vector<float> scratchL;
     std::vector<float> scratchR;
+
+    // MIDI arrives before each render call with its offset into the coming slice; it is
+    // applied at that sample instead of at the start of the slice
+    struct QueuedMidi { UInt32 offset; uint8_t status, data1, data2; };
+    static constexpr int kMidiQueueSize = 2048;
+    QueuedMidi midiQueue[kMidiQueueSize]{};
+    int midiCount = 0;
     std::vector<PropListener> propListeners;
     std::vector<RenderNotify> renderNotifies;
 
@@ -411,9 +418,8 @@ static OSStatus auGetProperty(void *selfPtr,
             CFNumberRef nSub = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &sub);
             CFNumberRef nManu = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &manu);
 
-            phs::PhsSynthEngine::SerializedState st{};
-            self->engine.getState(st);
-            CFDataRef stateData = CFDataCreate(kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(&st), sizeof(st));
+            const std::vector<uint8_t> st = self->engine.saveState();
+            CFDataRef stateData = CFDataCreate(kCFAllocatorDefault, st.data(), static_cast<CFIndex>(st.size()));
 
             CFDictionarySetValue(dict, CFSTR("version"), nVer);
             CFDictionarySetValue(dict, CFSTR("type"), nType);
@@ -637,6 +643,7 @@ static OSStatus auScheduleParameters(void *selfPtr,
 static OSStatus auReset(void *selfPtr, AudioUnitScope, AudioUnitElement) {
     auto *self = static_cast<PhsAudioUnit *>(selfPtr);
     self->engine.reset();
+    self->midiCount = 0;
     return noErr;
 }
 
@@ -674,7 +681,26 @@ static OSStatus auRender(void *selfPtr,
         ioData->mBuffers[1].mData = bufR;
     }
 
-    self->engine.processBlock(bufL, bufR ? bufR : self->scratchR.data(), static_cast<int>(inNumberFrames));
+    float *outR = bufR ? bufR : self->scratchR.data();
+    {
+        int idx = 0;
+        UInt32 cur = 0;
+        while (cur < inNumberFrames) {
+            while (idx < self->midiCount && self->midiQueue[idx].offset <= cur) {
+                const auto &m = self->midiQueue[idx++];
+                self->engine.handleMidiEvent(m.status, m.data1, m.data2);
+            }
+            const UInt32 next = idx < self->midiCount ? std::min(self->midiQueue[idx].offset, inNumberFrames) : inNumberFrames;
+            self->engine.processBlock(bufL + cur, outR + cur, static_cast<int>(next - cur));
+            cur = next;
+        }
+        // Events beyond the slice (should not happen) are applied at its end
+        while (idx < self->midiCount) {
+            const auto &m = self->midiQueue[idx++];
+            self->engine.handleMidiEvent(m.status, m.data1, m.data2);
+        }
+        self->midiCount = 0;
+    }
 
     // Post-render notify
     AudioUnitRenderActionFlags postFlags = localFlags | kAudioUnitRenderAction_PostRender;
@@ -691,15 +717,25 @@ static OSStatus auMIDIEvent(void *selfPtr,
                             UInt32 inData1,
                             UInt32 inData2,
                             UInt32 inOffsetSampleFrame) {
-    (void)inOffsetSampleFrame;
     auto *self = static_cast<PhsAudioUnit *>(selfPtr);
-    self->engine.handleMidiEvent(static_cast<uint8_t>(inStatus & 0xFF),
-                                 static_cast<uint8_t>(inData1 & 0x7F),
-                                 static_cast<uint8_t>(inData2 & 0x7F));
+    const uint8_t st = static_cast<uint8_t>(inStatus & 0xFF), d1 = static_cast<uint8_t>(inData1 & 0x7F),
+                  d2 = static_cast<uint8_t>(inData2 & 0x7F);
+    if (self->midiCount < PhsAudioUnit::kMidiQueueSize) {
+        // Insertion keeps the queue ordered by offset (hosts send it nearly sorted)
+        int i = self->midiCount++;
+        while (i > 0 && self->midiQueue[i - 1].offset > inOffsetSampleFrame) {
+            self->midiQueue[i] = self->midiQueue[i - 1];
+            --i;
+        }
+        self->midiQueue[i] = {inOffsetSampleFrame, st, d1, d2};
+    } else {
+        self->engine.handleMidiEvent(st, d1, d2);
+    }
     return noErr;
 }
 
-static OSStatus auSysEx(void *, const UInt8 *, UInt32) {
+static OSStatus auSysEx(void *selfPtr, const UInt8 *data, UInt32 length) {
+    if (data && length > 0) static_cast<PhsAudioUnit *>(selfPtr)->engine.handleSysEx(data, length);
     return noErr;
 }
 

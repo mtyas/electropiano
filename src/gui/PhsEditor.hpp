@@ -6,6 +6,7 @@
 // events, provide a Canvas and repaint when wantsRedraw() says so.
 
 #include "../dsp/PhsSynthEngine.hpp"
+#include "../dsp/PhsTuningLibrary.hpp"
 #include "PhsCanvas.hpp"
 #include <functional>
 #include <string>
@@ -20,11 +21,21 @@ using ParamChangeCallback = std::function<void(uint32_t paramId, float normalize
 static constexpr int kEditorWidth = 900;
 static constexpr int kEditorHeight = 776;
 
+// Editor zoom (1 = 900 x 776), remembered between sessions in the user data folder
+float loadEditorZoom();
+void saveEditorZoom(float zoom);
+inline int scaledEditorWidth(float zoom) { return static_cast<int>(kEditorWidth * zoom + 0.5f); }
+inline int scaledEditorHeight(float zoom) { return static_cast<int>(kEditorHeight * zoom + 0.5f); }
+
 namespace gui {
 
 struct EditorHost {
     ParamChangeCallback paramChanged;
     std::function<void(const std::string& url)> openUrl;
+    // Asks the platform view to change the editor's zoom (it resizes itself and tells the host)
+    std::function<void(float zoom)> requestZoom;
+    // Shows a file chooser for a Scala file; returns the path, or "" (absent where unsupported)
+    std::function<std::string()> chooseTuningFile;
 };
 
 enum class Key { Escape, Enter, Backspace };
@@ -47,6 +58,9 @@ public:
     // True when anything visible has changed since the last draw()
     bool wantsRedraw();
     void detachEngine() { engine_ = nullptr; }
+    // The zoom the platform view is drawing at (shown on the Play page)
+    void setZoom(float zoom) { zoom_ = zoom; forceRedraw_ = true; }
+    float zoom() const { return zoom_; }
 
 private:
     enum class PanelKind { Resonator, Pickup, Amp, EnvFilter, Phaser, Chorus, Echo, Reverb, Output };
@@ -82,6 +96,10 @@ private:
     bool mouseDownList(float x, float y);
     void setEqNode(int band, float x, float y);
     void drawLabScope(Canvas& c, const Rect& area);
+    void drawLabPlay(Canvas& c, const Rect& area);
+    bool mouseDownPlay(float x, float y);
+    void refreshTunings();
+    void selectTuning(int index);
     void drawTineView(Canvas& c, const Rect& card);
     void drawPickupView(Canvas& c, const Rect& card);
     void drawAmpView(Canvas& c, const Rect& card);
@@ -128,9 +146,11 @@ private:
     float stageLabelX_[3]{};
     Rect performance_{}, pedal_{}, pitchWheel_{}, modWheel_{}, keyboard_{};
 
-    // Preset browser
+    // Preset browser (tab 6 = favourites; typing filters the list)
     bool browserOpen_ = false;
-    Rect browserRect_{}, browserClose_{}, browserSave_{}, browserDelete_{}, tabRects_[6]{};
+    Rect browserRect_{}, browserClose_{}, browserSave_{}, browserDelete_{}, tabRects_[7]{}, searchRect_{};
+    bool favoritesOnly_ = false;
+    std::string search_;
     PresetCategory category_ = PresetCategory::All;
     int listScroll_ = 0;
     int selectedPreset_ = -1;
@@ -147,8 +167,8 @@ private:
     // Modulation & expression panel
     struct Stepper { uint32_t paramId; Rect rect; };
     struct Slider { uint32_t paramId; Rect rect; };
-    static constexpr int kNumPages = 7;
-    int page_ = 0;                     // 0 Sound, 1 Modulation, 2 Macros, 3 Space, 4 EQ, 5 Dynamics, 6 Scope
+    static constexpr int kNumPages = 8;
+    int page_ = 0;                     // 0 Sound, 1 Modulation, 2 Macros, 3 Space, 4 EQ, 5 Dynamics, 6 Scope, 7 Play
     Rect pageTabs_[kNumPages]{};
     float pageBarY_ = 640.0f;
     std::vector<Knob> modKnobs_;
@@ -177,6 +197,19 @@ private:
     Rect menuRect_{};
     uint32_t menuParam_ = 0;
     std::vector<MenuItem> menuItems_;
+
+    // Play page: tuning list and zoom
+    std::vector<TuningEntry> tunings_;
+    std::string tuningError_;
+    Rect tunePrev_{}, tuneNext_{}, tuneBox_{}, tuneLoad_{}, tuneFolder_{}, zoomPrev_{}, zoomNext_{};
+    float zoom_ = 1.0f;
+
+    // A/B compare: two snapshots of every parameter, one of them live
+    Rect abRects_[3]{};                 // A, B, copy to the other
+    std::array<std::array<float, kNumParams>, 2> abStore_{};
+    bool abValid_[2] = {false, false};
+    int abSlot_ = 0;
+    void switchAb(int slot);
 
     // Interaction
     int draggedKnob_ = -1;

@@ -79,7 +79,6 @@ public:
     void prepare(float sampleRate) {
         fs_ = std::max(8000.0f, sampleRate);
         dt_ = 1.0f / fs_;
-        releaseDecayMul_ = std::exp(-dt_ / 0.055f);
         damperStep_ = dt_ / 0.012f;
         dcBlockR_ = 1.0f - (kTwoPi * 20.0f / fs_);
         thumpLenSamples_ = static_cast<uint64_t>(0.028f * fs_);
@@ -93,7 +92,9 @@ public:
         sustained_ = false;
         damperAmount_ = 0.0f;
         releaseEnv_ = 1.0f;
-        midiNote_ = -1;
+        midiNote_ = key_ = -1;
+        keyDown_ = sostenutoHeld_ = false;
+        damperDepth_ = reedDamperDepth_ = 0.0f;
         ageSamples_ = 0;
         releaseAgeSamples_ = 0;
         qh_ = ph_ = 0.0;
@@ -109,9 +110,26 @@ public:
 
     // channel: MIDI channel the note arrived on (MPE gives each note its own); the expression
     // arguments are the per-note controller values already received for that channel.
+    // True when a new strike of this note can hit the tine while it still rings, as on the
+    // instrument (a tine-only voice that stays tine-only). Reeds are restarted instead.
+    bool canRestrikeInPlace(int midiNote, const float* params) const {
+        return active_ && midiNote == midiNote_ && hasTine_ && !hasReed_ && !tineDone_ &&
+               stepIndex(params[kParamResonator], 1) == 0 && params[kParamResMorph] <= 0.001f;
+    }
+
+    // restrike: the hammer hits the still-moving tine (see canRestrikeInPlace); the tine's motion,
+    // the pickup and the output filters carry on, so a repeated note neither clicks nor loses
+    // the ring it builds on
     void noteOn(int midiNote, float velocity, const float* params, int channel = 0,
-                float bendSemis = 0.0f, float pressure = 0.0f, float slide = 0.5f) {
+                float bendSemis = 0.0f, float pressure = 0.0f, float slide = 0.5f, bool restrike = false) {
+        const bool keepState = restrike && canRestrikeInPlace(midiNote, params);
         midiNote_ = midiNote;
+        key_ = midiNote;
+        keyDown_ = true;
+        sostenutoHeld_ = false;
+        damperDepth_ = 0.0f;
+        reedDamperDepth_ = 0.0f;
+        setCondition(midiNote, params[kParamCondition]);
         channel_ = channel;
         bendTarget_ = bendCur_ = bendSemis;
         bendApplied_ = 0.0f;
@@ -126,17 +144,20 @@ public:
         ageSamples_ = 0;
         releaseAgeSamples_ = 0;
         reedDamperStarted_ = false;
-        resetPickupPaths();
+        if (!keepState) {
+            resetPickupPaths();
+            fmPhase_ = 0.0f;
+            dcBlockX1_ = dcBlockY1_ = 0.0f;
+        }
         tineDone_ = reedDone_ = false;
-        fmPhase_ = 0.0f;
-        dcBlockX1_ = dcBlockY1_ = 0.0f;
         xPrevMm_ = 0.0;
         geomKey_ = -1.0f;
 
         resonator_ = stepIndex(params[kParamResonator], 1) ? Resonator::Reed : Resonator::Tine;
         pickup_ = stepIndex(params[kParamPickupType], 1) ? Pickup::Electrostatic : Pickup::Magnetic;
         modelType_ = stepIndex(params[kParamModelType], 3);
-        f0Base_ = 440.0f * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f);
+        tuneHz_ = masterTuneHz(params[kParamMasterTune]);
+        f0Base_ = tuneHz_ * std::pow(2.0f, (static_cast<float>(midiNote) - 69.0f) / 12.0f + (varCents_ + tuningCents_) / 1200.0f);
         f0_ = f0Base_ * std::pow(2.0f, bendSemis / 12.0f);
         bendApplied_ = bendSemis;
         keyScale_ = std::clamp((static_cast<float>(midiNote) - 21.0f) / 87.0f, 0.0f, 1.0f);
@@ -149,18 +170,28 @@ public:
         tinePath_ = resonator_ == Resonator::Tine ? 0 : 1;
         reedPath_ = 1 - tinePath_;
         if (hasReed_) noteOnReed(params);
-        if (hasTine_) noteOnTine(params); // last, so the tine's velocity shaping drives the action noise
+        if (hasTine_) noteOnTine(params, keepState); // last, so the tine's velocity shaping drives the action noise
 
         // Electrostatic pickup: the comb section and side of the band follow the note
         const int wMidi = std::clamp(midiNote, wurli::kMidiLo, wurli::kMidiHi);
-        for (int path = 0; path < (dual_ ? 2 : 1); ++path) {
+        for (int path = 0; path < (dual_ ? 2 : 1) && !keepState; ++path) {
             const double swingMm = path == reedPath_ ? reed_.swingMm() : 1.0;
             pp_[path].es.init(fs_, wMidi, swingMm, electrostaticRestMm(params[kParamPickupSymmetry]),
                               wurli::kCTotal * std::pow(2.0, (0.45 - params[kParamPickupResonance]) * 2.0));
         }
-        if (hasReed_) reed_.setPitchScale(std::pow(2.0, bendSemis / 12.0));
+        if (hasReed_) reed_.setPitchScale(reedPitchScale(bendSemis));
         updateExpressionTargets(params);
     }
+
+    // The key that started the note (the engine matches note-offs with it; with Transpose
+    // the voice sounds a different note)
+    void setKey(int key) { key_ = key; }
+    // Microtuning: this note's offset from 12-TET in cents (set before noteOn)
+    void setTuningCents(float cents) { tuningCents_ = cents; }
+    int getKey() const { return key_; }
+    bool isKeyDown() const { return keyDown_; }
+    bool isSostenutoHeld() const { return sostenutoHeld_; }
+    void setSostenutoHeld(bool held) { sostenutoHeld_ = held; }
 
     // Per-note controllers, set from the audio thread as they arrive
     void setExpression(float bendSemis, float pressure, float slide) {
@@ -170,22 +201,21 @@ public:
     }
     int getChannel() const { return channel_; }
 
-    void noteOff(bool sustainPedalDown) {
-        if (sustainPedalDown) {
-            sustained_ = true;
-        } else {
-            releasing_ = true;
-            sustained_ = false;
-            releaseAgeSamples_ = 0;
-        }
+    // Key released. damperDepth: how far the damper may close (0 = held off by the sustain or
+    // sostenuto pedal, 1 = fully on; in between = half-pedalling). releaseVelocity: how fast the
+    // key came up, which sets how quickly the damper lands (0.5 = the instrument's usual speed).
+    void noteOff(float damperDepth, float releaseVelocity = 0.5f) {
+        keyDown_ = false;
+        releaseVelocity_ = std::clamp(releaseVelocity, 0.0f, 1.0f);
+        // Damper landing time: 30 ms (slow release) .. 12 ms .. 5 ms (fast)
+        damperStep_ = dt_ / (0.012f * std::pow(2.0f, (0.5f - releaseVelocity_) * 2.4f));
+        applyDamper(damperDepth);
     }
 
-    void setSustainPedal(bool down) {
-        if (!down && sustained_) {
-            sustained_ = false;
-            releasing_ = true;
-            releaseAgeSamples_ = 0;
-        }
+    // Pedal movement while the key is up: the damper follows it (it can lift off again)
+    void setDamper(float damperDepth) {
+        if (keyDown_) return;
+        applyDamper(damperDepth);
     }
 
     float processSample(const float* params) {
@@ -225,7 +255,10 @@ public:
 
     bool isActive() const { return active_; }
     bool isReleasing() const { return releasing_; }
-    int getMidiNote() const { return midiNote_; }
+    int getMidiNote() const { return key_; }
+    int getSoundingNote() const { return midiNote_; }
+    // Fundamental frequency actually sounding (tuning, condition and bend included)
+    float getFrequency() const { return f0_; }
     uint64_t getAge() const { return ageSamples_; }
     const VoiceTelemetry& getTelemetry() const { return telemetry_; }
 
@@ -238,7 +271,7 @@ private:
     void updateExpressionTargets(const float* params) {
         const float pressureAmt = modAmount(params[kParamPressureAmt]);
         const float slideAmt = modAmount(params[kParamSlideAmt]);
-        gapEff_ = std::clamp(params[kParamPickupDistance] + 0.40f * pressure_ * pressureAmt, 0.0f, 1.0f);
+        gapEff_ = std::clamp(params[kParamPickupDistance] + varGap_ + 0.40f * pressure_ * pressureAmt, 0.0f, 1.0f);
         qEff_ = std::clamp(params[kParamPickupResonance] + 0.55f * (slide_ - 0.5f) * 2.0f * slideAmt, 0.0f, 1.0f);
         fmDepth_ = params[kParamGapFmDepth];
         fmInc_ = std::min(3.0f, kTwoPi * f0_ * gapFmRatio(params[kParamGapFmRatio]) / fs_);
@@ -253,20 +286,65 @@ private:
     }
 
     // Glide toward the target bend (about 1.5 ms) and retune the resonator when it has moved
-    void updateBend(const float*) {
+    void updateBend(const float* params) {
         bendCur_ += 0.30f * (bendTarget_ - bendCur_);
-        if (std::fabs(bendCur_ - bendApplied_) < 0.002f) return;
+        const float tune = masterTuneHz(params[kParamMasterTune]);
+        const bool retune = tune != tuneHz_;
+        if (!retune && std::fabs(bendCur_ - bendApplied_) < 0.002f) return;
+        if (retune) {
+            f0Base_ *= tune / tuneHz_;
+            tuneHz_ = tune;
+        }
         bendApplied_ = bendCur_;
         const float ratio = std::pow(2.0f, bendCur_ / 12.0f);
         f0_ = f0Base_ * ratio;
-        if (hasReed_) reed_.setPitchScale(ratio);
+        if (hasReed_) reed_.setPitchScale(reedPitchScale(bendCur_));
         if (hasTine_) updateTuning_ = true;
+    }
+
+    // The reed's tables are built at A4 = 440 Hz: concert pitch, the key's condition and the bend
+    // are applied as one frequency ratio
+    double reedPitchScale(float bendSemis) const {
+        return (tuneHz_ / 440.0) * std::pow(2.0, (bendSemis + (varCents_ + tuningCents_) / 100.0) / 12.0);
+    }
+
+    // Per-key variation, deterministic for each key (the same piano every time): tuning a few
+    // cents off, uneven voicing, decay and hammer wear. condition 0 = factory-perfect.
+    void setCondition(int midiNote, float condition) {
+        auto u = [midiNote](uint32_t seed) { return static_cast<float>(wurli::hashUnit(midiNote, seed) * 2.0 - 1.0); };
+        const float c = std::clamp(condition, 0.0f, 1.0f);
+        varCents_ = c * 7.0f * u(0xC0FFEE);
+        varDecay_ = 1.0f + 0.35f * c * u(0xDECA1);
+        varBell_ = 0.22f * c * u(0xBE11);
+        varHard_ = 0.16f * c * u(0x4A2D);
+        varGap_ = 0.12f * c * u(0x6A9);
+        varToneBar_ = 0.20f * c * u(0x70BA2);
+        varStrike_ = 0.08f * c * u(0x57121);
+    }
+
+    // Damper position for a released key (see noteOff)
+    void applyDamper(float depth) {
+        depth = std::clamp(depth, 0.0f, 1.0f);
+        if (depth <= 0.02f) {
+            // Held off: the note keeps ringing (if the damper was down, it lifts again)
+            sustained_ = true;
+            releasing_ = false;
+            damperDepth_ = 0.0f;
+            return;
+        }
+        if (!releasing_) releaseAgeSamples_ = 0;
+        sustained_ = false;
+        releasing_ = true;
+        damperDepth_ = depth;
+        // A damper that only grazes the tine (half pedal) takes much longer to stop it
+        const float speed = std::pow(2.0f, (releaseVelocity_ - 0.5f) * 1.2f);
+        releaseDecayMulEff_ = std::exp(-dt_ * speed * depth * depth / 0.055f);
     }
 
     // =========================================================================
     // Rhodes tine
     // =========================================================================
-    void noteOnTine(const float* params) {
+    void noteOnTine(const float* params, bool keepState = false) {
         const float touchParam = params[kParamVelocityCurve];
         const float gamma = 2.70f - 2.25f * touchParam;
         shapedVel_ = std::pow(velocity_, gamma);
@@ -280,7 +358,7 @@ private:
 
         // --- Hammer: mass + nonlinear felt (PyPHS mechanics.felt) ---
         // H_felt(xi) = k/(alpha+1) * xi^(alpha+1); damper force = lambda * xi^(alpha-1) * dxi/dt
-        const float hardness = params[kParamHammerHardness];
+        const float hardness = std::clamp(params[kParamHammerHardness] + varHard_, 0.0f, 1.0f);
         const float effHardness = std::clamp(hardness + 0.35f * (shapedVel_ - 0.5f), 0.02f, 0.98f);
         alphaHammer_ = (modelType_ == 2) ? (2.10f + 0.90f * effHardness) : (1.85f + 0.85f * effHardness);
         mHammer_ = 1.0;
@@ -296,25 +374,30 @@ private:
         // Felt loss: Cushion 0 = elastic snap, 1 = heavy felt absorption
         lambdaHammer_ = (kHammer_ / vHammer0) * (0.02 + 0.75 * params[kParamHammerHysteresis]) * xiNom;
 
-        qBeam_.fill(0.0);
-        pBeam_.fill(0.0);
-        qTb_ = pTb_ = 0.0;
-        // The hammer starts in contact position with its strike momentum
-        qh_ = 0.0;
+        if (!keepState) {
+            qBeam_.fill(0.0);
+            pBeam_.fill(0.0);
+            qTb_ = pTb_ = 0.0;
+        }
+        // The hammer starts in contact position (touching the strike point, wherever the tine is)
+        // with its strike momentum
+        double wStrike = 0.0;
+        for (int m = 0; m < kNumBeamModes; ++m) if (modeActive_[m]) wStrike += cStrike_[m] * qBeam_[m];
+        qh_ = wStrike;
         ph_ = mHammer_ * vHammer0;
         xiPrev_ = 0.0;
         hammerDetached_ = false;
     }
 
     void updateModalParameters(const float* params) {
-        const float xStrike = strikePositionXL(params[kParamStrikePosition]);
+        const float xStrike = strikePositionXL(std::clamp(params[kParamStrikePosition] + varStrike_, 0.0f, 1.0f));
         const float decayParam = params[kParamTineDecay];
-        const float bellParam = params[kParamTineBell];
-        const float toneBarParam = params[kParamToneBarCoupling];
-        const float hardness = params[kParamHammerHardness];
+        const float bellParam = std::clamp(params[kParamTineBell] + varBell_, 0.0f, 1.0f);
+        const float toneBarParam = std::clamp(params[kParamToneBarCoupling] + varToneBar_, 0.0f, 1.0f);
+        const float hardness = std::clamp(params[kParamHammerHardness] + varHard_, 0.0f, 1.0f);
 
         const float material = params[kParamMaterial];
-        float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_) * materialDecayMul(material);
+        float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_) * materialDecayMul(material) * varDecay_;
         if (modelType_ == 2) baseT60 *= 0.68f; // steel-reed voiced tine
 
         for (int m = 0; m < kNumBeamModes; ++m) {
@@ -326,6 +409,7 @@ private:
             const float fm = f0_ * ratio;
             if (fm >= 0.44f * fs_) {
                 modeActive_[m] = false;
+                qBeam_[m] = pBeam_[m] = 0.0;
                 cStrike_[m] = cPickup_[m] = 0.0f;
                 omegaMode_[m] = 100.0f;
                 dampMode_[m] = 1000.0f;
@@ -405,18 +489,19 @@ private:
     double feltEnergy(double xi) const {
         return xi > 0.0 ? kHammer_ / (alphaHammer_ + 1.0) * std::pow(xi, alphaHammer_ + 1.0) : 0.0;
     }
-    double feltStorageForce(double xiOld, double xiNew) const {
+    // eOld: feltEnergy(xiOld), passed in because the contact solve evaluates many xiNew per sample
+    double feltStorageForce(double xiOld, double xiNew, double eOld) const {
         const double d = xiNew - xiOld;
         if (std::fabs(d) < 1e-12) return kHammer_ * std::pow(std::max(0.0, 0.5 * (xiOld + xiNew)), alphaHammer_);
-        return (feltEnergy(xiNew) - feltEnergy(xiOld)) / d;
+        return (feltEnergy(xiNew) - eOld) / d;
     }
     // Storage (discrete gradient) + felt damper r(xi) * dxi/dt. A felt cannot pull the
     // tine back, so the total is held at >= 0; the clamped part is extra dissipation.
-    double feltForce(double xiOld, double xiNew) const {
+    double feltForce(double xiOld, double xiNew, double eOld) const {
         const double d = xiNew - xiOld;
         const double xm = 0.5 * (xiOld + xiNew);
         const double r = xm > 0.0 ? lambdaHammer_ * std::pow(xm, alphaHammer_ - 1.0) : 0.0;
-        return std::max(0.0, feltStorageForce(xiOld, xiNew) + r * d / dt_);
+        return std::max(0.0, feltStorageForce(xiOld, xiNew, eOld) + r * d / dt_);
     }
 
     float processTine(const float* params) {
@@ -443,13 +528,15 @@ private:
 
         // Damper felt lands over 12 ms (no note-off clicks)
         if (releasing_) {
-            damperAmount_ = std::min(1.0f, damperAmount_ + damperStep_);
-            releaseEnv_ *= releaseDecayMul_;
+            damperAmount_ = damperAmount_ < damperDepth_ ? std::min(damperDepth_, damperAmount_ + damperStep_)
+                                                         : std::max(damperDepth_, damperAmount_ - damperStep_);
+            releaseEnv_ *= releaseDecayMulEff_;
         } else {
-            damperAmount_ = 0.0f;
-            releaseEnv_ = 1.0f;
+            // Lifting (or never down): the felt leaves the tine; what is left keeps ringing
+            damperAmount_ = std::max(0.0f, damperAmount_ - damperStep_);
         }
-        const float damperExtraDamp = damperAmount_ * ((modelType_ == 2) ? 75.0f : 55.0f);
+        // A damper that only grazes the tine (half pedal) presses with less force as well
+        const float damperExtraDamp = damperAmount_ * std::max(damperDepth_, damperAmount_) * ((modelType_ == 2) ? 75.0f : 55.0f);
         if (coeffsDirty_ || damperExtraDamp != cachedDamperExtra_) rebuildIntegratorCoefficients(damperExtraDamp);
 
         const double dtD = static_cast<double>(dt_);
@@ -478,10 +565,10 @@ private:
                     qFree = qBeam_[0] + c0.dtOverM0 * (pBeam_[0] + dpMid);
                     dqdF = c0.dtOverM0 * c0.a22 * h * cm * c0.invDet;
                 } else {
-                    const ModeCoeffs& mc = modeCoeffs_[m];
-                    const double dpMid = (-mc.hk * qBeam_[m] - mc.eps * pBeam_[m]) * mc.invDenom;
-                    qFree = qBeam_[m] + mc.dtOverM * (pBeam_[m] + dpMid);
-                    dqdF = mc.dtOverM * h * cm * mc.invDenom;
+                    const int u = m - 1;
+                    const double dpMid = (-up_.hk[u] * qBeam_[m] - up_.eps[u] * pBeam_[m]) * up_.invDenom[u];
+                    qFree = qBeam_[m] + up_.dtOverM[u] * (pBeam_[m] + dpMid);
+                    dqdF = up_.dtOverM[u] * h * cm * up_.invDenom[u];
                 }
                 wNow += cm * qBeam_[m];
                 wFree += cm * qFree;
@@ -491,11 +578,12 @@ private:
             const double xiFree = qh_ + dtD * ph_ / mHammer_ - wFree;
 
             double xiNew = xiFree;
+            const double eOld = feltEnergy(xiOld);
             if (xiFree > 0.0 || xiOld > 0.0) {
                 // g(xi) = xi - xiFree + sens * F(xi) is increasing; bracket and solve (Illinois)
-                auto g = [&](double xi) { return xi - xiFree + sens * feltForce(xiOld, xi); };
+                auto g = [&](double xi) { return xi - xiFree + sens * feltForce(xiOld, xi, eOld); };
                 double hi = xiFree, ghi = g(hi);
-                double lo = xiFree - sens * feltForce(xiOld, xiFree) - 1e-12, glo = g(lo);
+                double lo = xiFree - ghi - 1e-12, glo = g(lo); // ghi == sens * F(xiFree)
                 for (int k = 0; k < 8 && glo > 0.0; ++k) { lo -= std::fabs(lo - hi) + 1e-9; glo = g(lo); }
                 xiNew = hi;
                 if (ghi > 0.0 && glo < 0.0) {
@@ -509,9 +597,9 @@ private:
                     }
                 }
             }
-            contactForce = feltForce(xiOld, xiNew);
+            contactForce = feltForce(xiOld, xiNew, eOld);
             // P_diss = (F - F_storage) * dxi/dt >= 0 (felt damper, plus any clamped pull)
-            feltDissPower = (contactForce - feltStorageForce(xiOld, xiNew)) * (xiNew - xiOld) / dtD;
+            feltDissPower = (contactForce - feltStorageForce(xiOld, xiNew, eOld)) * (xiNew - xiOld) / dtD;
             const double phOld = ph_;
             ph_ -= dtD * contactForce;
             qh_ += dtD * 0.5 * (phOld + ph_) / mHammer_;
@@ -540,24 +628,32 @@ private:
             beamDissPower += c0.R0 * v0Mid * v0Mid + c0.Rt * vtMid * vtMid;
             inputPower += fExt0 * v0Mid;
         }
-        for (int m = 1; m < kNumBeamModes; ++m) {
-            if (!modeActive_[m]) continue;
-            const ModeCoeffs& c = modeCoeffs_[m];
-            const double fExt = static_cast<double>(cStrike_[m]) * contactForce;
-            const double dpMid = (-c.hk * qBeam_[m] - c.eps * pBeam_[m] + h * fExt) * c.invDenom;
-            const double pMid = pBeam_[m] + dpMid;
-            pBeam_[m] += 2.0 * dpMid;
-            qBeam_[m] += c.dtOverM * pMid;
-            beamEnergy += 0.5 * (c.stiff * qBeam_[m] * qBeam_[m] + pBeam_[m] * pBeam_[m] * c.invM);
-            const double vMid = pMid * c.invM;
-            beamDissPower += c.R * vMid * vMid;
-            inputPower += fExt * vMid;
+        // Modes 1..4 as one branch-free loop over flat coefficient arrays (vectorises); an inactive
+        // mode has all-zero coefficients and stays at rest
+        {
+            double* q = qBeam_.data() + 1;
+            double* p = pBeam_.data() + 1;
+            double e = 0.0, diss = 0.0, inP = 0.0;
+            for (int u = 0; u < kUpperModes; ++u) {
+                const double fExt = up_.cStrike[u] * contactForce;
+                const double dpMid = (-up_.hk[u] * q[u] - up_.eps[u] * p[u] + h * fExt) * up_.invDenom[u];
+                const double pMid = p[u] + dpMid;
+                p[u] += 2.0 * dpMid;
+                q[u] += up_.dtOverM[u] * pMid;
+                e += up_.stiff[u] * q[u] * q[u] + p[u] * p[u] * up_.invM[u];
+                const double vMid = pMid * up_.invM[u];
+                diss += up_.R[u] * vMid * vMid;
+                inP += fExt * vMid;
+            }
+            beamEnergy += 0.5 * e;
+            beamDissPower += diss;
+            inputPower += inP;
         }
 
         // =====================================================================
         // STEP 3: tip excursion and velocity at the pickup
         // =====================================================================
-        const float tbWeight = 0.02f + 0.65f * params[kParamToneBarCoupling];
+        const float tbWeight = 0.02f + 0.65f * std::clamp(params[kParamToneBarCoupling] + varToneBar_, 0.0f, 1.0f);
         const float wBody = static_cast<float>(qBeam_[0] + tbWeight * qTb_)
                           + (modeActive_[3] ? cPickup_[3] * static_cast<float>(qBeam_[3]) : 0.0f)
                           + (modeActive_[4] ? cPickup_[4] * static_cast<float>(qBeam_[4]) : 0.0f);
@@ -576,7 +672,9 @@ private:
         }
         if (releasing_ && thumpParam > 0.001f && releaseAgeSamples_ < relTapLenSamples_) {
             const float tRel = static_cast<float>(releaseAgeSamples_) * dt_;
-            out += thumpParam * 0.035f * std::exp(-tRel / 0.0050f) * std::sin(kTwoPi * 380.0f * tRel);
+            // The damper lands harder when the key is let go quickly
+            const float tapLevel = 0.035f * damperDepth_ * (0.4f + 1.2f * releaseVelocity_);
+            out += thumpParam * tapLevel * std::exp(-tRel / 0.0050f) * std::sin(kTwoPi * 380.0f * tRel);
             ++releaseAgeSamples_;
         }
         out *= releaseEnv_;
@@ -619,9 +717,16 @@ private:
     }
 
     float processReed(const float* params) {
-        if (releasing_ && !reedDamperStarted_) {
-            reed_.noteOff();
+        if (releasing_ && std::fabs(damperDepth_ - reedDamperDepth_) > 0.05f) {
+            // Half pedal: a lightly touching felt damps the reed more slowly
+            const double speed = std::pow(2.0, (releaseVelocity_ - 0.5) * 1.2);
+            reed_.setDamper(damperDepth_ * damperDepth_ * speed);
+            reedDamperDepth_ = damperDepth_;
             reedDamperStarted_ = true;
+        } else if (!releasing_ && reedDamperStarted_) {
+            reed_.setDamper(0.0);
+            reedDamperDepth_ = 0.0f;
+            reedDamperStarted_ = false;
         }
         const double disp = reed_.next();       // 1.0 = the note's ff swing at the pickup
         const double xMm = disp * reed_.swingMm();
@@ -732,8 +837,11 @@ private:
         double eps11, eps22, a11, a12, a21, a22, invDet;
         double invM0, invMt, dtOverM0, dtOverMt, R0, Rt;
     };
-    struct ModeCoeffs {
-        double stiff, hk, eps, invDenom, invM, dtOverM, R;
+    // Implicit-midpoint coefficients of modes 1..4, one array per coefficient
+    static constexpr int kUpperModes = kNumBeamModes - 1;
+    struct UpperModeCoeffs {
+        alignas(32) double stiff[kUpperModes], hk[kUpperModes], eps[kUpperModes], invDenom[kUpperModes];
+        alignas(32) double invM[kUpperModes], dtOverM[kUpperModes], R[kUpperModes], cStrike[kUpperModes];
     };
 
     void rebuildIntegratorCoefficients(float damperExtraDamp) {
@@ -767,16 +875,22 @@ private:
         c.dtOverMt = dtD / mt;
 
         for (int m = 1; m < kNumBeamModes; ++m) {
-            ModeCoeffs& mc = modeCoeffs_[m];
+            const int u = m - 1;
+            if (!modeActive_[m]) {
+                up_.stiff[u] = up_.hk[u] = up_.eps[u] = up_.invM[u] = up_.dtOverM[u] = up_.R[u] = up_.cStrike[u] = 0.0;
+                up_.invDenom[u] = 1.0;
+                continue;
+            }
             const double mass = massMode_[m];
             const double dampRate = dampMode_[m] + damperExtraDamp * 1.6f;
-            mc.stiff = stiffMode_[m];
-            mc.hk = h * mc.stiff;
-            mc.eps = h * dampRate + mc.hk * (h / mass);
-            mc.invDenom = 1.0 / (1.0 + mc.eps);
-            mc.invM = 1.0 / mass;
-            mc.dtOverM = dtD / mass;
-            mc.R = mass * dampRate;
+            up_.stiff[u] = stiffMode_[m];
+            up_.hk[u] = h * up_.stiff[u];
+            up_.eps[u] = h * dampRate + up_.hk[u] * (h / mass);
+            up_.invDenom[u] = 1.0 / (1.0 + up_.eps[u]);
+            up_.invM[u] = 1.0 / mass;
+            up_.dtOverM[u] = dtD / mass;
+            up_.R[u] = mass * dampRate;
+            up_.cStrike[u] = cStrike_[m];
         }
         cachedDamperExtra_ = damperExtraDamp;
         coeffsDirty_ = false;
@@ -790,7 +904,6 @@ private:
 
     float fs_ = 48000.0f;
     float dt_ = 1.0f / 48000.0f;
-    float releaseDecayMul_ = 1.0f;
     float damperStep_ = 0.0f;
     float dcBlockR_ = 0.997f;
     uint64_t thumpLenSamples_ = 0;
@@ -814,6 +927,13 @@ private:
     int channel_ = 0;
     float bendTarget_ = 0.0f, bendCur_ = 0.0f, bendApplied_ = 0.0f;
     float pressure_ = 0.0f, slide_ = 0.5f;
+    float releaseVelocity_ = 0.5f;
+    int key_ = -1;
+    bool keyDown_ = false, sostenutoHeld_ = false;
+    float damperDepth_ = 0.0f, reedDamperDepth_ = 0.0f, releaseDecayMulEff_ = 1.0f;
+    float tuneHz_ = 440.0f, tuningCents_ = 0.0f;
+    float varCents_ = 0.0f, varDecay_ = 1.0f, varBell_ = 0.0f, varHard_ = 0.0f, varGap_ = 0.0f;
+    float varToneBar_ = 0.0f, varStrike_ = 0.0f;
     float gapEff_ = 0.5f, qEff_ = 0.45f;
     bool updateTuning_ = false;
     uint64_t ageSamples_ = 0;
@@ -858,7 +978,7 @@ private:
     bool coeffsDirty_ = true;
     float cachedDamperExtra_ = -1.0f;
     CoupledCoeffs coupled_{};
-    std::array<ModeCoeffs, kNumBeamModes> modeCoeffs_{};
+    UpperModeCoeffs up_{};
     std::array<float, kNumBeamModes> vTipWeight_{};
 
     // Reed

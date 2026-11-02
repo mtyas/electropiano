@@ -142,8 +142,11 @@ private:
 @public
     std::unique_ptr<phs::gui::Editor> editor_;
     NSTimer* redrawTimer_;
+    float zoom_;
+    phs::EditorResizeRequest requestResize_;
 }
 - (instancetype)initWithFrame:(NSRect)frame engine:(phs::PhsSynthEngine*)engine callback:(phs::ParamChangeCallback)cb;
+- (void)applyZoom:(float)zoom;
 - (void)stopTimer;
 @end
 
@@ -157,7 +160,23 @@ private:
         host.openUrl = [](const std::string& url) {
             [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]]];
         };
+        host.requestZoom = [self](float z) { [self applyZoom:z]; };
+        host.chooseTuningFile = []() -> std::string {
+            NSOpenPanel* panel = [NSOpenPanel openPanel];
+            [panel setCanChooseFiles:YES];
+            [panel setCanChooseDirectories:NO];
+            [panel setAllowsMultipleSelection:NO];
+            [panel setMessage:@"Choose a Scala tuning (.scl). A .kbm of the same name is used as its keyboard mapping."];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [panel setAllowedFileTypes:@[@"scl"]];
+#pragma clang diagnostic pop
+            if ([panel runModal] != NSModalResponseOK || [[panel URLs] count] == 0) return {};
+            return std::string([[[[panel URLs] objectAtIndex:0] path] UTF8String]);
+        };
+        zoom_ = static_cast<float>(frame.size.width / phs::kEditorWidth);
         editor_ = std::make_unique<phs::gui::Editor>(engine, std::move(host));
+        editor_->setZoom(zoom_);
         redrawTimer_ = [[NSTimer scheduledTimerWithTimeInterval:(1.0 / 30.0) target:self selector:@selector(onTimerTick:)
                                                        userInfo:nil repeats:YES] retain];
     }
@@ -180,6 +199,21 @@ private:
 }
 
 - (BOOL)isFlipped { return NO; }
+
+// The editor's own zoom control: resize, then let the plugin host know
+- (void)applyZoom:(float)zoom {
+    const int w = phs::scaledEditorWidth(zoom), h = phs::scaledEditorHeight(zoom);
+    if (requestResize_ && !requestResize_(w, h)) return;
+    [self setFrameSize:NSMakeSize(w, h)];
+}
+
+// Any size the view is given (by the host or by applyZoom) sets the zoom
+- (void)setFrameSize:(NSSize)size {
+    [super setFrameSize:size];
+    zoom_ = std::max(0.25f, static_cast<float>(std::min(size.width / phs::kEditorWidth, size.height / phs::kEditorHeight)));
+    if (editor_) editor_->setZoom(zoom_);
+    [self setNeedsDisplay:YES];
+}
 - (BOOL)acceptsFirstResponder { return YES; }
 - (BOOL)acceptsFirstMouse:(NSEvent*)event { (void)event; return YES; }
 
@@ -192,11 +226,17 @@ private:
     (void)dirtyRect;
     CGContextRef ctx = (CGContextRef)[[NSGraphicsContext currentContext] CGContext];
     if (!ctx || !editor_) return;
+    CGContextSaveGState(ctx);
+    CGContextScaleCTM(ctx, zoom_, zoom_);
     CGCanvas canvas(ctx);
     editor_->draw(canvas);
+    CGContextRestoreGState(ctx);
 }
 
-- (NSPoint)localPoint:(NSEvent*)event { return [self convertPoint:[event locationInWindow] fromView:nil]; }
+- (NSPoint)localPoint:(NSEvent*)event {
+    const NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    return NSMakePoint(p.x / zoom_, p.y / zoom_);
+}
 
 - (void)mouseDown:(NSEvent*)event {
     [[self window] makeFirstResponder:self];
@@ -245,14 +285,27 @@ private:
 
 namespace phs {
 
-NSView* createPhsEditorView(PhsSynthEngine* engine, ParamChangeCallback onParamChange) {
-    return [[PHS_VIEW_CLASS_NAME alloc] initWithFrame:NSMakeRect(0, 0, kEditorWidth, kEditorHeight)
-                                               engine:engine
-                                             callback:onParamChange];
+NSView* createPhsEditorView(PhsSynthEngine* engine, ParamChangeCallback onParamChange, EditorResizeRequest requestResize) {
+    const float zoom = loadEditorZoom();
+    PHS_VIEW_CLASS_NAME* view = [[PHS_VIEW_CLASS_NAME alloc] initWithFrame:NSMakeRect(0, 0, scaledEditorWidth(zoom), scaledEditorHeight(zoom))
+                                                                    engine:engine
+                                                                  callback:onParamChange];
+    view->requestResize_ = std::move(requestResize);
+    return view;
 }
 
 void destroyPhsEditorView(NSView* view) {
     if (view && [view isKindOfClass:[PHS_VIEW_CLASS_NAME class]]) [(PHS_VIEW_CLASS_NAME*)view stopTimer];
+}
+
+void addPhsEditorViewToParent(NSView* view, void* parentNSView) {
+    if (view && parentNSView) [static_cast<NSView*>(parentNSView) addSubview:view];
+}
+
+void releasePhsEditorView(NSView* view) {
+    if (!view) return;
+    [view removeFromSuperview];
+    [view release];
 }
 
 gui::Editor* editorOfPhsView(NSView* view) {

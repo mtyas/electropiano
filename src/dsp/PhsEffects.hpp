@@ -3,6 +3,7 @@
 #include "PhsParameters.hpp"
 #include "wurli/WurliAmp.hpp"
 #include "PhsCabinet.hpp"
+#include "PhsReverb.hpp"
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -57,6 +58,15 @@ public:
         echoTimeSlew_ = 1.0f - std::exp(-dt_ / 0.08f);
         wahAttack_ = 1.0f - std::exp(-dt_ / 0.002f);
         wahRelease_ = 1.0f - std::exp(-dt_ / 0.150f);
+        rmsCoef_ = 1.0f - std::exp(-1.0f / (0.010f * fs_));
+        sideEnvCoef_ = 1.0f - std::exp(-1.0f / (0.020f * fs_));
+        limReleaseCoef_ = 1.0f - std::exp(-1.0f / (0.08f * fs_));
+
+        preDelayL_.init(static_cast<int>(0.125f * fs_) + 4);
+        preDelayR_.init(static_cast<int>(0.125f * fs_) + 4);
+        studioHall_.prepare(fs_);
+        plate_.prepare(fs_);
+        bbdCoef_ = 1.0f - std::exp(-6.2831853f * 9000.0f / fs_);
 
         // Initialize BBD Chorus delay buffer (~50 ms max)
         const size_t chorusLen = static_cast<size_t>(0.06f * fs_) + 16;
@@ -107,6 +117,13 @@ public:
         lfoPrimed_ = false;
         toneBassParam_ = -1.0f;
         toneTrebleParam_ = -1.0f;
+        compAttackParam_ = compReleaseParam_ = compHpfParam_ = limCeilParam_ = echoTimeParam_ = -1.0f;
+        sideGainIn_ = sideGainOut_ = 0.0f;
+        preDelayL_.clear();
+        preDelayR_.clear();
+        studioHall_.reset();
+        plate_.reset();
+        bbdLpL_ = bbdLpR_ = 0.0f;
         for (int s = 0; s < 4; ++s) {
             phaserStateL_[s] = 0.0f;
             phaserStateR_[s] = 0.0f;
@@ -159,7 +176,7 @@ public:
     float meterR() const { return meterR_; }
     float gainReductionDb() const { return compGrDb_; }
     float compLevelDb() const { return compLevelDb_; }
-    float limiterReductionDb() const { return limGrDb_; }
+    float limiterReductionDb() const { return 20.0f * std::log10(limGain_ + 1e-9f); }
     float ampInLevel() const { return satIn_; }
     float ampOutLevel() const { return satOut_; }
     // The suitcase preamp's static transfer curve (what the editor plots)
@@ -168,10 +185,19 @@ public:
         return suitcaseShape(x, driveParam, g) / std::sqrt(1.0f + 0.45f * (g - 1.0f));
     }
 
+    // Offline bounce: the highest-quality paths regardless of the Quality setting
+    void setOfflineRendering(bool offline) { offline_ = offline; }
+
     // Host tempo for the synced tremolo / phaser / echo (the engine updates it every block)
     void setTempo(float bpm) { bpm_ = std::clamp(bpm, 20.0f, 400.0f); }
 
     void processStereoSample(float monoIn, const float* params, float modWheel, float& outL, float& outR) {
+        processStereoSample(monoIn, 0.0f, params, modWheel, outL, outR);
+    }
+
+    // sideIn: the keyboard's stereo spread (each voice times its pan position). The amp and
+    // cabinet are one mono circuit, so the side signal skips them and follows their gain instead.
+    void processStereoSample(float monoIn, float sideIn, const float* params, float modWheel, float& outL, float& outR) {
         const int modelType = std::clamp(static_cast<int>(std::round(params[kParamModelType] * 3.0f)), 0, 3);
 
         const bool amp200A = stepIndex(params[kParamAmpType], 1) == 1;
@@ -216,7 +242,8 @@ public:
         } else {
             // Suitcase / stage preamp: smooth tube-JFET saturation with 2nd-harmonic bloom,
             // run 2x / 4x oversampled (Quality) so the saturation does not fold back as aliasing
-            ampOut = processSuitcasePreamp(x, params[kParamPreampDrive], stepIndex(params[kParamQuality], 2));
+            // An offline bounce always takes the 4x path
+            ampOut = processSuitcasePreamp(x, params[kParamPreampDrive], offline_ ? 2 : stepIndex(params[kParamQuality], 2));
         }
 
         // Speaker cabinet (OpenWurli speaker model; 0 = flat DI)
@@ -248,6 +275,15 @@ public:
         float sigL = ampOut + bassGain_ * lowStateL_ + trebleGain_ * highBand;
 
         float sigR = sigL;
+        if (sideIn != 0.0f || sideGainIn_ > 1e-9f) {
+            // Side level tracks the amp + cabinet + tone gain (their envelopes, ~20 ms)
+            sideGainIn_ += sideEnvCoef_ * (std::fabs(monoIn) - sideGainIn_);
+            sideGainOut_ += sideEnvCoef_ * (std::fabs(sigL) - sideGainOut_);
+            const float g = std::min(8.0f, sideGainOut_ / (sideGainIn_ + 1e-6f));
+            const float side = sideIn * g;
+            sigL -= side;
+            sigR += side;
+        }
 
         // Control-rate LFOs: the transcendental maths behind every modulator is evaluated
         // once per kCtrlRate samples and linearly ramped, which is inaudible at <12 Hz rates.
@@ -304,8 +340,22 @@ public:
             chorusBufL_[chorusWriteIdx_] = sigL;
             chorusBufR_[chorusWriteIdx_] = sigR;
 
-            const float wetL = readFractionalDelay(chorusBufL_, chorusWriteIdx_, lfoCur_[kLfoChorusDL]);
-            const float wetR = readFractionalDelay(chorusBufR_, chorusWriteIdx_, lfoCur_[kLfoChorusDR]);
+            float wetL, wetR;
+            if (stepIndex(params[kParamChorusMode], 1) == 1) {
+                // Tri-chorus: three BBD taps whose delays sweep 120 degrees apart, panned left /
+                // centre / right, through the BBD's anti-alias low-pass
+                const float t0 = readFractionalDelay(chorusBufL_, chorusWriteIdx_, lfoCur_[kLfoTri0]);
+                const float t1 = 0.5f * (readFractionalDelay(chorusBufL_, chorusWriteIdx_, lfoCur_[kLfoTri1]) +
+                                         readFractionalDelay(chorusBufR_, chorusWriteIdx_, lfoCur_[kLfoTri1]));
+                const float t2 = readFractionalDelay(chorusBufR_, chorusWriteIdx_, lfoCur_[kLfoTri2]);
+                bbdLpL_ += bbdCoef_ * (0.75f * (t0 + 0.55f * t1) - bbdLpL_);
+                bbdLpR_ += bbdCoef_ * (0.75f * (t2 + 0.55f * t1) - bbdLpR_);
+                wetL = bbdLpL_;
+                wetR = bbdLpR_;
+            } else {
+                wetL = readFractionalDelay(chorusBufL_, chorusWriteIdx_, lfoCur_[kLfoChorusDL]);
+                wetR = readFractionalDelay(chorusBufR_, chorusWriteIdx_, lfoCur_[kLfoChorusDR]);
+            }
 
             if (++chorusWriteIdx_ >= bufSize) chorusWriteIdx_ = 0;
 
@@ -318,7 +368,13 @@ public:
         // =========================================================================
         const float echoMix = params[kParamDelayMix];
         if (echoMix > 0.001f) {
-            const float target = syncedSeconds(delayTimeSec(params[kParamDelayTime]), params[kParamEchoSync], bpm_) * fs_;
+            if (params[kParamDelayTime] != echoTimeParam_ || params[kParamEchoSync] != echoSyncParam_ || bpm_ != echoBpm_) {
+                echoTimeParam_ = params[kParamDelayTime];
+                echoSyncParam_ = params[kParamEchoSync];
+                echoBpm_ = bpm_;
+                echoTarget_ =syncedSeconds(delayTimeSec(params[kParamDelayTime]), params[kParamEchoSync], bpm_) * fs_;
+            }
+            const float target = echoTarget_;
             if (echoTime_ < 0.0f) echoTime_ = target;
             echoTime_ += echoTimeSlew_ * (target - echoTime_); // glides like a tape speed change
             echoWowPhase_ += 0.55f * dt_;
@@ -348,10 +404,29 @@ public:
         // 7. Stereo Spring / Hall Reverb
         // =========================================================================
         const float revMix = params[kParamReverbMix];
-        if (revMix > 0.001f && stepIndex(params[kParamReverbType], 1) == 1) {
+        const int revAlgo = reverbAlgo(params[kParamReverbType]);
+        // Pre-delay (shared by every reverb); 0 ms reads the current sample
+        float preL = sigL, preR = sigR;
+        if (revMix > 0.001f) {
+            preDelayL_.push(sigL);
+            preDelayR_.push(sigR);
+            const int pd = static_cast<int>(preDelayMs(params[kParamReverbPreDelay]) * 0.001f * fs_);
+            if (pd > 0) {
+                preL = preDelayL_.tap(pd + 1);
+                preR = preDelayR_.tap(pd + 1);
+            }
+        }
+        if (revMix > 0.001f && (revAlgo == kRevStudioHall || revAlgo == kRevPlate)) {
+            float wl, wr;
+            const float damping = 0.35f + 0.3f * (1.0f - params[kParamReverbDecay]);
+            if (revAlgo == kRevStudioHall) studioHall_.process(preL * 0.5f, preR * 0.5f, params[kParamReverbDecay], damping, wl, wr);
+            else plate_.process(preL * 0.5f, preR * 0.5f, params[kParamReverbDecay], damping, wl, wr);
+            sigL = sigL * (1.0f - 0.40f * revMix) + wl * (0.85f * revMix);
+            sigR = sigR * (1.0f - 0.40f * revMix) + wr * (0.85f * revMix);
+        } else if (revMix > 0.001f && revAlgo == kRevSpring) {
             // Spring tank: dispersive allpass chains in feedback delay loops give the "boing" chirp
             const float g = 0.55f + 0.38f * params[kParamReverbDecay];
-            const float in = (sigL + sigR) * 0.5f * 0.5f;
+            const float in = (preL + preR) * 0.5f * 0.5f;
             float wet[2];
             for (int k = 0; k < 2; ++k) {
                 float y = springBuf_[k][springIdx_[k]];
@@ -374,7 +449,7 @@ public:
         } else if (revMix > 0.001f) {
             const float revDecay = 0.35f + 0.58f * params[kParamReverbDecay];
             const float damp = 0.58f; // Warm high-frequency acoustic damping
-            const float revInRaw = (sigL + sigR) * 0.15f;
+            const float revInRaw = (preL + preR) * 0.15f;
             revLpState_ += alphaRev_ * (revInRaw - revLpState_);
             const float revInL = revLpState_;
             const float revInR = revLpState_;
@@ -446,12 +521,24 @@ public:
             const float thr = compThreshDb(params[kParamCompThresh]);
             const float ratio = compRatio(params[kParamCompRatio]);
             const float knee = compKneeDb(params[kParamCompKnee]);
-            const float attack = 1.0f - std::exp(-1.0f / (0.001f * compAttackMs(params[kParamCompAttack]) * fs_));
-            const float release = 1.0f - std::exp(-1.0f / (0.001f * compReleaseMs(params[kParamCompRelease]) * fs_));
+            // Time constants only change with their knobs
+            if (params[kParamCompAttack] != compAttackParam_) {
+                compAttackParam_ = params[kParamCompAttack];
+                compAttackCoef_ = 1.0f - std::exp(-1.0f / (0.001f * compAttackMs(compAttackParam_) * fs_));
+            }
+            if (params[kParamCompRelease] != compReleaseParam_) {
+                compReleaseParam_ = params[kParamCompRelease];
+                compReleaseCoef_ = 1.0f - std::exp(-1.0f / (0.001f * compReleaseMs(compReleaseParam_) * fs_));
+            }
+            const float attack = compAttackCoef_, release = compReleaseCoef_;
             // Sidechain: high-pass the detector so bass does not pump the whole mix
             float dL = sigL, dR = sigR;
             if (params[kParamCompHpf] > 0.01f) {
-                const float a = std::exp(-6.2831853f * compHpfHz(params[kParamCompHpf]) / fs_);
+                if (params[kParamCompHpf] != compHpfParam_) {
+                    compHpfParam_ = params[kParamCompHpf];
+                    compHpfCoef_ = std::exp(-6.2831853f * compHpfHz(compHpfParam_) / fs_);
+                }
+                const float a = compHpfCoef_;
                 scLpL_ = (1.0f - a) * dL + a * scLpL_;
                 scLpR_ = (1.0f - a) * dR + a * scLpR_;
                 dL -= scLpL_;
@@ -460,7 +547,7 @@ public:
             float level;
             if (stepIndex(params[kParamCompDetect], 1) == 1) {
                 const float e = 0.5f * (dL * dL + dR * dR);
-                rmsState_ += (1.0f - std::exp(-1.0f / (0.010f * fs_))) * (e - rmsState_);
+                rmsState_ += rmsCoef_ * (e - rmsState_);
                 level = std::sqrt(rmsState_);
             } else {
                 level = std::max(std::fabs(dL), std::fabs(dR));
@@ -470,7 +557,7 @@ public:
             const float grTarget = compStaticGrDb(over, ratio, knee);
             compGr_ += (grTarget < compGr_ ? attack : release) * (grTarget - compGr_);
             const float autoGain = stepIndex(params[kParamCompAuto], 1) ? -thr * (1.0f - 1.0f / ratio) * 0.5f : 0.0f;
-            const float gain = std::pow(10.0f, (compGr_ + autoGain + compMakeupDb(params[kParamCompMakeup])) / 20.0f);
+            const float gain = dbToGain(compGr_ + autoGain + compMakeupDb(params[kParamCompMakeup]));
             sigL += compMix * (sigL * gain - sigL);
             sigR += compMix * (sigR * gain - sigR);
             compGrDb_ = compGr_;
@@ -486,16 +573,19 @@ public:
         sigL *= masterGain;
         sigR *= masterGain;
         if (stepIndex(params[kParamLimOn], 1) == 1) {
-            const float ceilLin = std::pow(10.0f, limCeilDb(params[kParamLimCeil]) / 20.0f);
+            if (params[kParamLimCeil] != limCeilParam_) {
+                limCeilParam_ = params[kParamLimCeil];
+                limCeilLin_ = dbToGain(limCeilDb(limCeilParam_));
+            }
+            const float ceilLin = limCeilLin_;
             const float peak = std::max(std::fabs(sigL), std::fabs(sigR));
             const float want = peak > ceilLin ? ceilLin / peak : 1.0f;
-            limGain_ = want < limGain_ ? want : limGain_ + (1.0f - std::exp(-1.0f / (0.08f * fs_))) * (1.0f - limGain_);
+            limGain_ = want < limGain_ ? want : limGain_ + limReleaseCoef_ * (1.0f - limGain_);
             sigL *= limGain_;
             sigR *= limGain_;
         } else {
             limGain_ += 0.01f * (1.0f - limGain_);
         }
-        limGrDb_ = 20.0f * std::log10(limGain_ + 1e-9f);
         outL = softLimit(sigL);
         outR = softLimit(sigR);
         meterL_ = std::max(std::fabs(outL), meterL_ * meterDecay_);
@@ -546,7 +636,8 @@ private:
     }
 
     static constexpr int kCtrlRate = 16;
-    enum LfoOutput { kLfoPhaserAL, kLfoPhaserAR, kLfoTremL, kLfoTremR, kLfoChorusDL, kLfoChorusDR, kNumLfoOutputs };
+    enum LfoOutput { kLfoPhaserAL, kLfoPhaserAR, kLfoTremL, kLfoTremR, kLfoChorusDL, kLfoChorusDR,
+                     kLfoTri0, kLfoTri1, kLfoTri2, kNumLfoOutputs };
 
     // Advances every modulator by one control period and sets per-sample ramps toward
     // the values at the end of that period.
@@ -609,6 +700,10 @@ private:
         const float modR = 0.5f + 0.5f * std::cos(6.2831853f * chorusPhase_);
         out[kLfoChorusDL] = (7.5f + 4.5f * modL) * 0.001f * fs_;
         out[kLfoChorusDR] = (8.5f + 4.5f * modR) * 0.001f * fs_;
+        for (int k = 0; k < 3; ++k) {
+            const float mk = 0.5f + 0.5f * std::sin(6.2831853f * (chorusPhase_ + k / 3.0f));
+            out[kLfoTri0 + k] = (6.0f + 5.0f * mk) * 0.001f * fs_;
+        }
     }
 
     static inline float evalPreampAntideriv(float x) {
@@ -619,6 +714,8 @@ private:
         const float asymTerm = -0.06f / (1.0f + x * x);
         return logCosh + asymTerm;
     }
+
+    static inline float dbToGain(float db) { return std::exp(db * 0.115129255f); } // 10^(dB/20)
 
     static inline float softLimit(float x) {
         if (x > 2.5f) return 1.0f;
@@ -671,7 +768,18 @@ private:
     wurli::Biquad eqBq_[2][4];
     float eqKey_ = -1.0f;
     float scLpL_ = 0.0f, scLpR_ = 0.0f, rmsState_ = 0.0f, compGr_ = 0.0f, compLevelDb_ = -90.0f;
-    float limGain_ = 1.0f, limGrDb_ = 0.0f;
+    float limGain_ = 1.0f;
+    // Cached coefficients, recomputed when their knob moves
+    float rmsCoef_ = 0.0f, limReleaseCoef_ = 0.0f;
+    float sideEnvCoef_ = 0.0f, sideGainIn_ = 0.0f, sideGainOut_ = 0.0f;
+    bool offline_ = false;
+    rvb::Delay preDelayL_, preDelayR_;
+    StudioHall studioHall_;
+    PlateReverb plate_;
+    float bbdCoef_ = 1.0f, bbdLpL_ = 0.0f, bbdLpR_ = 0.0f;
+    float compAttackParam_ = -1.0f, compAttackCoef_ = 0.0f, compReleaseParam_ = -1.0f, compReleaseCoef_ = 0.0f;
+    float compHpfParam_ = -1.0f, compHpfCoef_ = 0.0f, limCeilParam_ = -1.0f, limCeilLin_ = 1.0f;
+    float echoTimeParam_ = -1.0f, echoSyncParam_ = -1.0f, echoBpm_ = -1.0f, echoTarget_ = 0.0f;
 
     static constexpr int kSpringStages = 32;
     static constexpr float kSpringAllpass = 0.70f;

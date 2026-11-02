@@ -4,6 +4,8 @@
 #include "PhsVoice.hpp"
 #include "PhsEffects.hpp"
 #include "PhsPresetManager.hpp"
+#include "PhsTuning.hpp"
+#include "PhsSympathetic.hpp"
 #include <atomic>
 #include <array>
 #include <vector>
@@ -12,10 +14,48 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <type_traits>
+#include <chrono>
+#if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
+#include <xmmintrin.h>
+#define PHS_FTZ_SSE 1
+#elif (defined(__aarch64__) || defined(__arm64__)) && (defined(__GNUC__) || defined(__clang__))
+#define PHS_FTZ_ARM64 1
+#endif
 
 namespace phs {
 
-static constexpr int kMaxVoices = 32;
+// Flushes denormals to zero while the engine renders, then restores the host's setting.
+// Decaying resonator, filter and reverb tails otherwise sink into the denormal range, where
+// x86 CPUs take ~100x longer per operation (a release tail can spike the audio thread).
+class ScopedFlushDenormals {
+public:
+    ScopedFlushDenormals() {
+#if defined(PHS_FTZ_SSE)
+        saved_ = _mm_getcsr();
+        _mm_setcsr(saved_ | 0x8040u); // FTZ | DAZ
+#elif defined(PHS_FTZ_ARM64)
+        uint64_t fpcr;
+        __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+        saved_ = fpcr;
+        __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr | (1ull << 24))); // FZ
+#endif
+    }
+    ~ScopedFlushDenormals() {
+#if defined(PHS_FTZ_SSE)
+        _mm_setcsr(static_cast<unsigned int>(saved_));
+#elif defined(PHS_FTZ_ARM64)
+        __asm__ __volatile__("msr fpcr, %0" : : "r"(saved_));
+#endif
+    }
+    ScopedFlushDenormals(const ScopedFlushDenormals&) = delete;
+    ScopedFlushDenormals& operator=(const ScopedFlushDenormals&) = delete;
+
+private:
+    uint64_t saved_ = 0;
+};
+
+static constexpr int kMaxVoices = 64;
 static constexpr int kScopeRingSize = 512;
 static constexpr int kAnalyzerSize = 4096;  // output ring for the spectrum analyser
 static constexpr int kGrHistory = 192;       // compressor gain-reduction history (about 2 s)
@@ -34,6 +74,8 @@ struct ScopeSnapshot {
     float tipVelocity = 0.0f;
     float hammerCompression = 0.0f;
     int activeVoices = 0;
+    int polyphony = 32;                      // voice limit in force
+    float cpuLoad = 0.0f;                    // share of the real-time budget used (smoothed, 1 = 100%)
     float hammerHold = 0.0f;                 // felt compression, held briefly so the contact is visible
     float ampIn = 0.0f, ampOut = 0.0f;       // amp stage peaks (for the saturation view)
     float meterL = 0.0f, meterR = 0.0f;      // output peak meters
@@ -48,6 +90,8 @@ struct ScopeSnapshot {
     std::array<float, kScopeRingSize> phaseV{};
     uint32_t writePos = 0;
 };
+
+static_assert(std::is_trivially_copyable<ScopeSnapshot>::value, "the scope is published with memcpy");
 
 struct UndoStep {
     std::string label;
@@ -90,23 +134,33 @@ public:
             v.prepare(fs_);
         }
         effects_.prepare(fs_);
-        sustainPedal_ = false;
+        symp_.prepare(fs_);
+        sympKeyTune_ = -1.0f;
+        sustainLevel_ = 0.0f;
+        sostenutoDown_ = softPedal_ = false;
         modWheel_ = 0.0f;
         resetExpression();
         envFollow_ = 0.0f;
         envAttack_ = 1.0f - std::exp(-1.0f / (0.005f * fs_));
         envRelease_ = 1.0f - std::exp(-1.0f / (0.120f * fs_));
+        fadeStep_ = 1.0f / (0.004f * fs_);
+        fadeGain_.fill(0.0f);
+        silentSamples_ = 0;
     }
 
     void reset() {
         for (auto& v : voices_) {
             v.reset();
         }
+        fadeGain_.fill(0.0f);
         effects_.reset();
-        sustainPedal_ = false;
+        symp_.reset();
+        sustainLevel_ = 0.0f;
+        sostenutoDown_ = softPedal_ = false;
         resetExpression();
         activeNoteMaskLow_.store(0, std::memory_order_relaxed);
         activeNoteMaskHigh_.store(0, std::memory_order_relaxed);
+        silentSamples_ = 0;
     }
 
     PhsPresetManager& getPresetManager() { return presetManager_; }
@@ -124,6 +178,7 @@ public:
         for (uint32_t i = 0; i < kNumParams; ++i) {
             targetParams_[i].store(preset->values[i], std::memory_order_relaxed);
         }
+        snapRequested_.store(true, std::memory_order_release); // a new preset jumps, it does not glide
     }
 
     int getCurrentPreset() const {
@@ -202,8 +257,8 @@ public:
         currentPreset_.store(prev.presetIdx, std::memory_order_relaxed);
         for (uint32_t i = 0; i < kNumParams; ++i) {
             targetParams_[i].store(prev.params[i], std::memory_order_relaxed);
-            smoothedParams_[i] = prev.params[i];
         }
+        snapRequested_.store(true, std::memory_order_release);
         return true;
     }
 
@@ -224,8 +279,8 @@ public:
         currentPreset_.store(next.presetIdx, std::memory_order_relaxed);
         for (uint32_t i = 0; i < kNumParams; ++i) {
             targetParams_[i].store(next.params[i], std::memory_order_relaxed);
-            smoothedParams_[i] = next.params[i];
         }
+        snapRequested_.store(true, std::memory_order_release);
         return true;
     }
 
@@ -273,18 +328,21 @@ public:
         }
     }
 
-    void setSustain(bool active) {
-        sustainPedal_ = active;
-        for (auto& v : voices_) {
-            if (v.isActive()) {
-                v.setSustainPedal(sustainPedal_);
-            }
-        }
+    void setSustain(bool active) { setSustainLevel(active ? 1.0f : 0.0f); }
+    bool isSustainActive() const { return sustainLevel_ >= 0.5f; }
+
+    // Continuous sustain pedal (CC64 as a position, 0..1): half-way lets the dampers graze the
+    // strings, as half-pedalling does on the instrument
+    void setSustainLevel(float level) {
+        sustainLevel_ = std::clamp(level, 0.0f, 1.0f);
+        updateReleasedDampers();
     }
 
-    bool isSustainActive() const {
-        return sustainPedal_;
-    }
+    // Microtuning (Scala .scl / .kbm, MIDI Tuning Standard)
+    TuningTable& getTuning() { return tuning_; }
+    const TuningTable& getTuning() const { return tuning_; }
+    // MIDI SysEx from the host (F0 .. F7); tuning messages retune following notes
+    void handleSysEx(const uint8_t* data, size_t size) { tuning_.handleSysEx(data, size); }
 
     // Host tempo for the synced LFOs, tremolo, phaser and echo
     void setTempo(float bpm) {
@@ -302,7 +360,9 @@ public:
             const float vel = static_cast<float>(data2) / 127.0f;
             noteOn(static_cast<int>(data1), vel, channel);
         } else if (msg == 0x80 || (msg == 0x90 && data2 == 0)) {
-            noteOff(static_cast<int>(data1), channel);
+            // Release velocity: 0x80 carries it (64 = not sent); note-on at zero velocity has none
+            const float relVel = (msg == 0x80 && data2 != 64 && data2 > 0) ? static_cast<float>(data2) / 127.0f : 0.5f;
+            noteOff(static_cast<int>(data1), channel, relVel);
         } else if (msg == 0xE0) {
             const int v14 = (data1 & 0x7F) | ((data2 & 0x7F) << 7);
             setChannelBend(channel, static_cast<float>(v14 - 8192) / 8192.0f);
@@ -312,18 +372,31 @@ public:
             setPolyPressure(static_cast<int>(data1 & 0x7F), static_cast<float>(data2 & 0x7F) / 127.0f);
         } else if (msg == 0xB0) {
             if (data1 == 64) {
-                sustainPedal_ = (data2 >= 64);
-                for (auto& v : voices_) {
-                    if (v.isActive()) {
-                        v.setSustainPedal(sustainPedal_);
+                setSustainLevel(static_cast<float>(data2) / 127.0f);
+            } else if (data1 == 66) {
+                // Sostenuto: holds the dampers off the notes whose keys are down right now
+                const bool down = data2 >= 64;
+                if (down != sostenutoDown_) {
+                    sostenutoDown_ = down;
+                    for (auto& v : voices_) {
+                        if (!v.isActive()) continue;
+                        if (down) v.setSostenutoHeld(v.isKeyDown());
+                    }
+                    if (!down) {
+                        updateReleasedDampers();
+                        for (auto& v : voices_) v.setSostenutoHeld(false);
                     }
                 }
+            } else if (data1 == 67) {
+                softPedal_ = data2 >= 64; // soft pedal: lighter, softer strikes while held
             } else if (data1 == 1) {
                 modWheel_ = static_cast<float>(data2) / 127.0f;
             } else if (data1 == 120 || data1 == 123) {
                 for (auto& v : voices_) {
                     v.reset();
                 }
+                fadeGain_.fill(0.0f);
+                sostenutoDown_ = softPedal_ = false;
             }
 
             // MPE: CC74 on a member channel is that note's slide, not the global brightness mapping
@@ -335,7 +408,7 @@ public:
             // Handle MIDI Learn or Mapped Controller
             const int32_t learning = learningParamId_.load(std::memory_order_relaxed);
             if (learning >= 0 && learning < static_cast<int32_t>(kNumParams)) {
-                if (data1 != 64 && data1 != 120 && data1 != 123) {
+                if (data1 != 64 && data1 != 66 && data1 != 67 && data1 != 120 && data1 != 123) {
                     const int8_t prevParam = ccToParam_[data1].load(std::memory_order_relaxed);
                     if (prevParam >= 0 && prevParam < static_cast<int8_t>(kNumParams)) {
                         paramToCc_[prevParam].store(-1, std::memory_order_relaxed);
@@ -388,6 +461,11 @@ public:
     void noteOn(int midiNote, float velocity, int channel = 0) {
         if (midiNote < 0 || midiNote > 127) return;
         const int ch = mpeEnabled() ? (channel & 15) : 0;
+        // Transpose moves the note that sounds; the key still identifies it for its note-off
+        const int sounding = std::clamp(midiNote + transposeSemis(targetParams_[kParamTranspose].load(std::memory_order_relaxed)), 0, 127);
+        float tuningCents = 0.0f;
+        if (!tuning_.centsFor(sounding, tuningCents)) return; // a key the keyboard mapping leaves out
+        if (softPedal_) velocity *= 0.62f;
 
         // Modulation sources that depend on the note: refresh them before the voice reads its parameters
         lastVelocity_ = velocity;
@@ -397,11 +475,15 @@ public:
         noteBrightness_[midiNote] = -1.0f;
         polyPressure_[midiNote] = 0.0f;
 
-        for (uint32_t i = 0; i < kNumParams; ++i) {
-            smoothedParams_[i] = targetParams_[i].load(std::memory_order_relaxed);
-        }
+        // The strike reads the knobs' target values. While other notes sound, the running smoothing is
+        // left alone so a knob being swept keeps gliding instead of jumping on every new note; with
+        // nothing sounding there is nothing to glide, and the smoothing catches up at once.
         float noteParams[kNumParams];
-        std::memcpy(noteParams, smoothedParams_.data(), sizeof(noteParams));
+        for (uint32_t i = 0; i < kNumParams; ++i) noteParams[i] = targetParams_[i].load(std::memory_order_relaxed);
+        bool anySounding = false;
+        for (const auto& v : voices_) anySounding = anySounding || v.isActive();
+        if (!anySounding) std::memcpy(smoothedParams_.data(), noteParams, sizeof(noteParams));
+        if (softPedal_) noteParams[kParamHammerHardness] = std::max(0.0f, noteParams[kParamHammerHardness] - 0.15f);
         applyModulation(noteParams);
         if (hostModActive_) {
             for (uint32_t i = 0; i < kNumParams; ++i) {
@@ -410,20 +492,28 @@ public:
         }
 
         const ExprValues ex = expressionFor(ch, midiNote);
-        auto start = [&](PhsVoice& v) { v.noteOn(midiNote, velocity, noteParams, ch, ex.bend, ex.pressure, ex.slide); };
+        auto start = [&](PhsVoice& v, bool restrike) {
+            v.setTuningCents(tuningCents);
+            v.noteOn(sounding, velocity, noteParams, ch, ex.bend, ex.pressure, ex.slide, restrike);
+            v.setKey(midiNote);
+        };
+        const int polyphony = std::min(kMaxVoices, polyphonyVoices(noteParams[kParamPolyphony]));
 
-        // 1. Check if this MIDI note is already playing on this channel -> re-strike
+        // 1. This note already sounds on this channel: re-strike it. A tine is hit while it still
+        //    rings; anything else hands its sound to a fade-out voice and starts afresh.
         for (auto& v : voices_) {
             if (v.isActive() && v.getMidiNote() == midiNote && v.getChannel() == ch) {
-                start(v);
+                const bool inPlace = v.canRestrikeInPlace(sounding, noteParams);
+                if (!inPlace) fadeOut(v);
+                start(v, inPlace);
                 return;
             }
         }
 
-        // 2. Find an idle voice
-        for (auto& v : voices_) {
-            if (!v.isActive()) {
-                start(v);
+        // 2. Find an idle voice within the polyphony
+        for (int i = 0; i < polyphony; ++i) {
+            if (!voices_[i].isActive()) {
+                start(voices_[i], false);
                 return;
             }
         }
@@ -431,7 +521,7 @@ public:
         // 3. Steal lowest-energy voice
         int stealIdx = 0;
         double minScore = 1e30;
-        for (int i = 0; i < kMaxVoices; ++i) {
+        for (int i = 0; i < polyphony; ++i) {
             const double energy = voices_[i].getTelemetry().totalHamiltonian;
             const double score = (voices_[i].isReleasing() ? 0.1 : 1.0) * energy;
             if (score < minScore) {
@@ -439,19 +529,27 @@ public:
                 stealIdx = i;
             }
         }
-        start(voices_[stealIdx]);
+        fadeOut(voices_[stealIdx]); // the stolen note fades out over a few ms instead of being cut
+        start(voices_[stealIdx], false);
     }
 
-    void noteOff(int midiNote, int channel = 0) {
+    // releaseVelocity 0..1: how fast the key came up (0.5 when the controller does not send it)
+    void noteOff(int midiNote, int channel = 0, float releaseVelocity = 0.5f) {
         const int ch = mpeEnabled() ? (channel & 15) : 0;
         for (auto& v : voices_) {
             if (v.isActive() && v.getMidiNote() == midiNote && v.getChannel() == ch) {
-                v.noteOff(sustainPedal_);
+                v.noteOff(damperDepthFor(v), releaseVelocity);
             }
         }
     }
 
+    // Hosts report offline bounces; the engine then uses its highest-quality processing
+    void setOfflineRendering(bool offline) { offline_ = offline; effects_.setOfflineRendering(offline); }
+    bool isOfflineRendering() const { return offline_; }
+
     void processBlock(float* outL, float* outR, int numSamples) {
+        const ScopedFlushDenormals ftz;
+        const BlockTimer timer(*this, numSamples);
         // Drain any GUI MIDI events first
         uint32_t r = guiMidiRead_.load(std::memory_order_relaxed);
         const uint32_t w = guiMidiWrite_.load(std::memory_order_acquire);
@@ -468,9 +566,57 @@ public:
             targets[p] = targetParams_[p].load(std::memory_order_relaxed);
         }
         smoothedParams_[kParamModelType] = targets[kParamModelType];
+        // Undo / redo / a loaded state jump straight to their values (requested from other threads)
+        if (snapRequested_.exchange(false, std::memory_order_acquire)) {
+            for (uint32_t p = 0; p < kNumParams; ++p) smoothedParams_[p] = targets[p];
+        }
+        // Only parameters still gliding toward their target are smoothed per sample; the rest are
+        // snapped once within 1e-6 (for most of a session nothing is moving at all)
+        uint16_t moving[kNumParams];
+        int numMoving = 0;
+        for (uint32_t p = 1; p < kNumParams; ++p) {
+            if (std::fabs(targets[p] - smoothedParams_[p]) > 1e-6f) moving[numMoving++] = static_cast<uint16_t>(p);
+            else smoothedParams_[p] = targets[p];
+        }
+        // Idle: no voice is sounding and the output has been silent for a second, so every tail
+        // has died away. The chain is paused (its state is silent) until the next note.
+        bool anyVoice = false;
+        for (const auto& v : voices_) anyVoice = anyVoice || v.isActive();
+        for (float g : fadeGain_) anyVoice = anyVoice || g > 0.0f;
+        anyVoice = anyVoice || symp_.isRinging();
+        if (!anyVoice && silentSamples_ >= static_cast<uint32_t>(fs_)) {
+            if (numMoving > 0) for (uint32_t p = 1; p < kNumParams; ++p) smoothedParams_[p] = targets[p];
+            for (int s = 0; s < numSamples; ++s) {
+                if (outL) outL[s] = 0.0f;
+                if (outR) outR[s] = 0.0f;
+                analyzer_[analyzerPos_++ & (kAnalyzerSize - 1)] = 0.0f;
+            }
+            scope_.activeVoices = 0;
+            scope_.meterL = scope_.meterR = scope_.ampIn = scope_.ampOut = 0.0f;
+            activeNoteMaskLow_.store(0, std::memory_order_relaxed);
+            activeNoteMaskHigh_.store(0, std::memory_order_relaxed);
+            publishScope();
+            return;
+        }
+
         prepareModulationBlock(targets);
         // Pitch-bend range or MPE mode may have changed: keep the sounding notes in step
         refreshExpression();
+
+        // Keyboard spread and sympathetic resonance, set up once per block
+        const float spread = targets[kParamStereoSpread] * 0.75f;
+        auto panOf = [spread](int note) { return spread * std::clamp((static_cast<float>(note) - 64.0f) / 40.0f, -1.0f, 1.0f); };
+        const float sympAmount = targets[kParamSympathetic];
+        const bool sympOn = sympAmount > 0.001f;
+        float panByNote[128];
+        for (int n = 0; n < 128; ++n) panByNote[n] = panOf(n);
+        if (sympOn) {
+            bool soundingNote[128] = {};
+            updateSympatheticTuning(targets);
+            symp_.setDampers(pedalDamperDepth() < 0.1f);
+            for (const auto& v : voices_) if (v.isActive()) soundingNote[v.getSoundingNote() & 127] = true;
+            symp_.setBlockRouting(soundingNote, panByNote);
+        }
 
         double blockH = 0.0;
         double blockDiss = 0.0;
@@ -478,21 +624,26 @@ public:
         float leadV = 0.0f;
         float leadXi = 0.0f;
         int activeCount = 0;
+        float blockPeak = 0.0f;
         uint64_t maskLow = 0;
         uint64_t maskHigh = 0;
 
         for (int s = 0; s < numSamples; ++s) {
-            for (uint32_t p = 1; p < kNumParams; ++p) {
+            for (int k = 0; k < numMoving; ++k) {
+                const uint16_t p = moving[k];
                 smoothedParams_[p] += smoothAlpha_ * (targets[p] - smoothedParams_[p]);
             }
 
-            float voiceSum = 0.0f;
+            // The energy / hammer read-outs are only published for the block's last sample
+            const bool lastSample = s == numSamples - 1;
+            float voiceSum = 0.0f, sideSum = 0.0f;
             double sampleH = 0.0;
             double sampleDiss = 0.0;
             float newestW = 0.0f;
             float newestV = 0.0f;
             float maxXi = 0.0f;
             uint64_t minAge = UINT64_MAX;
+            const PhsVoice* newest = nullptr;
             int countThisSample = 0;
 
             const float* liveParams = smoothedParams_.data();
@@ -512,7 +663,9 @@ public:
                 auto& v = voices_[vIdx];
                 if (!v.isActive()) continue;
 
-                voiceSum += v.processSample(liveParams);
+                const float y = v.processSample(liveParams);
+                voiceSum += y;
+                sideSum += panByNote[v.getSoundingNote() & 127] * y;
                 if (!v.isActive()) continue;
 
                 ++countThisSample;
@@ -523,22 +676,39 @@ public:
                     maskHigh |= (1ULL << (note - 64));
                 }
 
-                const auto& tel = v.getTelemetry();
-                sampleH += tel.totalHamiltonian;
-                sampleDiss += tel.dissipatedPower;
-                if (tel.hammerCompression > maxXi) {
-                    maxXi = tel.hammerCompression;
-                }
                 if (v.getAge() < minAge) {
                     minAge = v.getAge();
-                    newestW = tel.tipDisplacement;
-                    newestV = tel.tipVelocity;
+                    newest = &v;
                 }
+                if (lastSample) {
+                    const auto& tel = v.getTelemetry();
+                    sampleH += tel.totalHamiltonian;
+                    sampleDiss += tel.dissipatedPower;
+                    maxXi = std::max(maxXi, tel.hammerCompression);
+                }
+            }
+            for (int k = 0; k < kFadeVoices; ++k) {
+                if (fadeGain_[k] <= 0.0f) continue;
+                const float y = fadeGain_[k] * fadeVoices_[k].processSample(liveParams);
+                voiceSum += y;
+                sideSum += panByNote[fadeVoices_[k].getSoundingNote() & 127] * y;
+                fadeGain_[k] -= fadeStep_;
+                if (!fadeVoices_[k].isActive()) fadeGain_[k] = 0.0f;
+            }
+            if (newest) {
+                newestW = newest->getTelemetry().tipDisplacement;
+                newestV = newest->getTelemetry().tipVelocity;
             }
 
             float left = 0.0f;
             float right = 0.0f;
-            effects_.processStereoSample(voiceSum * kVoiceMixGain, liveParams, modWheel_, left, right);
+            if (sympOn && symp_.isActive()) {
+                float sympSide = 0.0f;
+                const float symp = symp_.process(voiceSum, sympSide);
+                voiceSum += kSympatheticGain * sympAmount * symp;
+                sideSum += kSympatheticGain * sympAmount * sympSide;
+            }
+            effects_.processStereoSample(voiceSum * kVoiceMixGain, sideSum * kVoiceMixGain, liveParams, modWheel_, left, right);
             {
                 const float level = std::fabs(left) + std::fabs(right);
                 envFollow_ += (level > envFollow_ ? envAttack_ : envRelease_) * (level - envFollow_);
@@ -546,6 +716,7 @@ public:
 
             if (outL) outL[s] = left;
             if (outR) outR[s] = right;
+            blockPeak = std::max(blockPeak, std::max(std::fabs(left), std::fabs(right)));
 
             analyzer_[analyzerPos_ & (kAnalyzerSize - 1)] = 0.5f * (left + right);
             ++analyzerPos_;
@@ -579,6 +750,7 @@ public:
         hammerHold_ = std::max(leadXi, hammerHold_ * 0.85f);
         scope_.hammerHold = hammerHold_;
         scope_.activeVoices = activeCount;
+        scope_.polyphony = polyphonyVoices(targets[kParamPolyphony]);
         scope_.ampIn = effects_.ampInLevel();
         scope_.ampOut = effects_.ampOutLevel();
         scope_.meterL = effects_.meterL();
@@ -588,7 +760,13 @@ public:
         scope_.limiterReductionDb = effects_.limiterReductionDb();
         activeNoteMaskLow_.store(maskLow, std::memory_order_relaxed);
         activeNoteMaskHigh_.store(maskHigh, std::memory_order_relaxed);
+        publishScope();
+        // -100 dBFS with nothing sounding counts toward going idle
+        silentSamples_ = (activeCount == 0 && blockPeak < 1e-5f) ? silentSamples_ + static_cast<uint32_t>(numSamples) : 0;
     }
+
+    // True while the engine is idle and skipping its processing (for hosts that can sleep a plugin)
+    bool isIdle() const { return silentSamples_ >= static_cast<uint32_t>(fs_); }
 
     bool isNoteActive(int midiNote) const {
         if (midiNote >= 0 && midiNote < 64) {
@@ -599,7 +777,18 @@ public:
         return false;
     }
 
-    const ScopeSnapshot& getScopeSnapshot() const { return scope_; }
+    // UI thread: a consistent copy of the latest published snapshot (seqlock; the audio thread
+    // never waits). The reference stays valid until the next call.
+    const ScopeSnapshot& getScopeSnapshot() const {
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            const uint32_t s1 = scopeSeq_.load(std::memory_order_acquire);
+            if (s1 & 1u) continue;
+            std::memcpy(&uiScope_, &scopePublished_, sizeof(ScopeSnapshot));
+            std::atomic_thread_fence(std::memory_order_acquire);
+            if (scopeSeq_.load(std::memory_order_relaxed) == s1) break;
+        }
+        return uiScope_;
+    }
     // Recent output (mono) for the spectrum analyser: kAnalyzerSize samples ending at analyzerPos()
     const float* analyzerData() const { return analyzer_.data(); }
     uint32_t analyzerPos() const { return analyzerPos_; }
@@ -608,7 +797,7 @@ public:
     // Binary state serialization for VST3 / CLAP / AU
     struct SerializedState {
         uint32_t magic = 0x50485345; // 'PHSE'
-        uint32_t version = 6;
+        uint32_t version = 7;
         int32_t presetIdx = 0;
         float params[kNumParams]{};
         int8_t midiCc[kNumParams]{};
@@ -617,13 +806,28 @@ public:
 
     void getState(SerializedState& out) const {
         out.magic = 0x50485345;
-        out.version = 6;
+        out.version = 7;
         out.presetIdx = currentPreset_.load(std::memory_order_relaxed);
         for (uint32_t i = 0; i < kNumParams; ++i) {
             out.params[i] = targetParams_[i].load(std::memory_order_relaxed);
             out.midiCc[i] = paramToCc_[i].load(std::memory_order_relaxed);
         }
         std::memset(out.reserved, 0, sizeof(out.reserved));
+    }
+
+    // Complete plugin state: the fixed block followed by a tuning chunk ('TUNE', byte count, text)
+    std::vector<uint8_t> saveState() {
+        SerializedState st{};
+        getState(st);
+        std::vector<uint8_t> out(sizeof(st));
+        std::memcpy(out.data(), &st, sizeof(st));
+        const std::string tune = tuning_.serialize();
+        const uint32_t len = static_cast<uint32_t>(tune.size());
+        const uint8_t* lenBytes = reinterpret_cast<const uint8_t*>(&len);
+        out.insert(out.end(), {'T', 'U', 'N', 'E'});
+        out.insert(out.end(), lenBytes, lenBytes + 4);
+        out.insert(out.end(), tune.begin(), tune.end());
+        return out;
     }
 
     bool setState(const void* data, size_t size) {
@@ -636,15 +840,30 @@ public:
         currentPreset_.store(std::clamp(pIdx, 0, presetManager_.getPresetCount() - 1), std::memory_order_relaxed);
 
         // Version 2 states carried 23 parameters, version 3 carried 32; later ones keep their defaults
-        const uint32_t storedParams = ver >= 6 ? kNumParams : ver == 5 ? kNumParamsV5 : ver == 4 ? kNumParamsV4 : ver == 3 ? kNumParamsV3 : kNumParamsV2;
+        const uint32_t storedParams = ver >= 7 ? kNumParams : ver == 6 ? kNumParamsV6 : ver == 5 ? kNumParamsV5
+                                    : ver == 4 ? kNumParamsV4 : ver == 3 ? kNumParamsV3 : kNumParamsV2;
         if (size < sizeof(uint32_t) * 3 + sizeof(float) * storedParams) return false;
         const float* pData = reinterpret_cast<const float*>(header + 3);
+        float loaded[kNumParams];
         for (uint32_t i = 0; i < kNumParams; ++i) {
             float v = kParamMetadata[i].defaultValue;
             if (i < storedParams && std::isfinite(pData[i])) v = std::clamp(pData[i], 0.0f, 1.0f);
-            targetParams_[i].store(v, std::memory_order_relaxed);
-            smoothedParams_[i] = v;
+            loaded[i] = v;
         }
+        migrateParams(loaded, storedParams);
+        for (uint32_t i = 0; i < kNumParams; ++i) targetParams_[i].store(loaded[i], std::memory_order_relaxed);
+        snapRequested_.store(true, std::memory_order_release);
+        // Tuning chunk (version 7 on); states without one play in equal temperament
+        bool tuned = false;
+        if (ver >= 7 && size >= sizeof(SerializedState) + 8) {
+            const auto* chunk = static_cast<const uint8_t*>(data) + sizeof(SerializedState);
+            uint32_t len = 0;
+            std::memcpy(&len, chunk + 4, 4);
+            if (std::memcmp(chunk, "TUNE", 4) == 0 && sizeof(SerializedState) + 8 + len <= size) {
+                tuned = tuning_.deserialize(std::string(reinterpret_cast<const char*>(chunk + 8), len));
+            }
+        }
+        if (!tuned) tuning_.resetToEqual();
         if (ver < 3) {
             // A v2 state's Model choice implied its stages
             const int model = stepIndex(targetParams_[kParamModelType].load(std::memory_order_relaxed), 3);
@@ -672,6 +891,67 @@ public:
     }
 
 private:
+    // Measures one processBlock against the real time it covers (the editor's CPU read-out)
+    struct BlockTimer {
+        PhsSynthEngine& e;
+        int n;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        BlockTimer(PhsSynthEngine& engine, int samples) : e(engine), n(samples) {}
+        ~BlockTimer() {
+            if (n <= 0) return;
+            const double used = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            const float load = static_cast<float>(used * e.fs_ / n);
+            // ~0.3 s smoothing, independent of the block size
+            const float a = 1.0f - std::exp(-static_cast<float>(n) / (0.3f * e.fs_));
+            e.cpuLoad_ += a * (load - e.cpuLoad_);
+            e.scope_.cpuLoad = e.cpuLoad_;
+        }
+    };
+    float cpuLoad_ = 0.0f;
+
+    // How far the dampers of released keys may close: the sustain pedal's position (fully up =
+    // 0 .. half-pedal .. fully down = 1), or 0 for notes the sostenuto holds
+    float pedalDamperDepth() const { return std::clamp((0.75f - sustainLevel_) / 0.6f, 0.0f, 1.0f); }
+    float damperDepthFor(const PhsVoice& v) const {
+        return (sostenutoDown_ && v.isSostenutoHeld()) ? 0.0f : pedalDamperDepth();
+    }
+    // The sympathetic bank follows the tuning (the harp's tines are tuned like the voices)
+    void updateSympatheticTuning(const float* targets) {
+        const uint32_t gen = tuning_.generation();
+        if (targets[kParamMasterTune] == sympKeyTune_ && gen == sympTuningGen_) return;
+        sympKeyTune_ = targets[kParamMasterTune];
+        sympTuningGen_ = gen;
+        const double tuneHz = masterTuneHz(targets[kParamMasterTune]);
+        for (int n = SympatheticBank::kLowKey; n <= SympatheticBank::kHighKey; ++n) {
+            float c = 0.0f;
+            const bool mapped = tuning_.centsFor(n, c);
+            symp_.setKeyFrequency(n, mapped ? tuneHz * std::pow(2.0, (n - 69) / 12.0 + c / 1200.0) : 0.0);
+        }
+    }
+
+    void updateReleasedDampers() {
+        for (auto& v : voices_) {
+            if (v.isActive() && !v.isKeyDown()) v.setDamper(damperDepthFor(v));
+        }
+    }
+
+    // Hands a sounding voice's state to a fade-out slot (the quietest one if all are busy)
+    void fadeOut(const PhsVoice& v) {
+        if (!v.isActive()) return;
+        int slot = 0;
+        for (int k = 1; k < kFadeVoices; ++k) if (fadeGain_[k] < fadeGain_[slot]) slot = k;
+        fadeVoices_[slot] = v;
+        fadeGain_[slot] = 1.0f;
+    }
+
+    void publishScope() {
+        const uint32_t seq = scopeSeq_.load(std::memory_order_relaxed);
+        scopeSeq_.store(seq + 1, std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_release);
+        std::memcpy(&scopePublished_, &scope_, sizeof(ScopeSnapshot));
+        scopeSeq_.store(seq + 2, std::memory_order_release);
+    }
+
     // ---- Expression bookkeeping -------------------------------------------
     struct ExprValues { float bend = 0.0f, pressure = 0.0f, slide = 0.5f; };
 
@@ -793,6 +1073,7 @@ private:
     std::array<std::atomic<float>, kNumParams> targetParams_{};
     std::array<float, kNumParams> smoothedParams_{};
     std::atomic<int> currentPreset_{0};
+    std::atomic<bool> snapRequested_{false};
     PhsPresetManager presetManager_;
 
     // Undo / Redo history
@@ -805,9 +1086,20 @@ private:
     std::array<std::atomic<int8_t>, 128> ccToParam_{};
 
     std::array<PhsVoice, kMaxVoices> voices_{};
+    static constexpr int kFadeVoices = 4;
+    std::array<PhsVoice, kFadeVoices> fadeVoices_{};
+    std::array<float, kFadeVoices> fadeGain_{};
+    float fadeStep_ = 1.0f / 192.0f;
     PhsEffectsChain effects_;
 
-    bool sustainPedal_ = false;
+    float sustainLevel_ = 0.0f;
+    bool sostenutoDown_ = false, softPedal_ = false;
+    bool offline_ = false;
+    TuningTable tuning_;
+    SympatheticBank symp_;
+    float sympKeyTune_ = -1.0f;
+    uint32_t sympTuningGen_ = 0;
+    static constexpr float kSympatheticGain = 12.0f;
     float modWheel_ = 0.0f;
     float bpm_ = 120.0f;
 
@@ -838,10 +1130,14 @@ private:
     std::atomic<uint64_t> activeNoteMaskLow_{0};
     std::atomic<uint64_t> activeNoteMaskHigh_{0};
     uint32_t scopeSampleCounter_ = 0;
+    uint32_t silentSamples_ = 0;
     float hammerHold_ = 0.0f;
     std::array<float, kAnalyzerSize> analyzer_{};
     uint32_t analyzerPos_ = 0, grCounter_ = 0;
     ScopeSnapshot scope_{};
+    ScopeSnapshot scopePublished_{};
+    mutable ScopeSnapshot uiScope_{};
+    std::atomic<uint32_t> scopeSeq_{0};
 };
 
 } // namespace phs
