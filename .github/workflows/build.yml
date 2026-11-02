@@ -1,0 +1,195 @@
+name: Builds
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# PHS_VERSION (archive names) is read from src/dsp/PhsVersion.hpp by each build job's Version step
+jobs:
+  # ===========================================================================
+  # macOS: CLAP, VST3, AU, LV2, standalone app (Universal: arm64 + x86_64)
+  # ===========================================================================
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
+
+      - name: Build and test (universal)
+        run: make test ARCHS="arm64;x86_64"
+
+      - name: Package
+        run: |
+          lipo -info build/electropiano.clap/Contents/MacOS/electropiano
+          mkdir -p dist
+          cp -R build/electropiano.clap build/electropiano.vst3 build/electropiano.component build/electropiano.app build/electropiano.lv2 dist/
+          cp README.md LICENSE dist/
+          cp docs/MANUAL.md dist/MANUAL.md
+          cd dist && ditto -c -k --sequesterRsrc . ../electropiano-v${{ env.PHS_VERSION }}-macOS-Universal.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electropiano-macOS
+          path: electropiano-v${{ env.PHS_VERSION }}-macOS-Universal.zip
+
+  # ===========================================================================
+  # Windows: CLAP, VST3, LV2 (x64)
+  # ===========================================================================
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        shell: bash
+        run: |
+          # Compiler errors are re-emitted as annotations so they are visible without signing in
+          status=0
+          for t in electropiano_CLAP electropiano_VST3 electropiano_LV2 test_phs_piano test_wurli_port; do
+            cmake --build build --config Release --target $t 2>&1 | tee -a build.log || status=1
+            [ "${PIPESTATUS[0]}" = 0 ] || status=1
+          done
+          if [ $status != 0 ]; then
+            grep -E "error [A-Z]+[0-9]+|fatal error" build.log | sed -E 's/ \[[^]]*\]$//' | sort -u | head -40 | sed 's/^/::error::/'; exit 1; fi
+
+      - name: Test
+        run: |
+          ./build/Release/test_wurli_port.exe
+          ./build/Release/test_phs_piano.exe
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/electropiano.vst3/Contents/x86_64-win
+          cp build/Release/electropiano.clap dist/
+          cp build/Release/electropiano.vst3 dist/electropiano.vst3/Contents/x86_64-win/electropiano.vst3
+          mkdir -p dist/electropiano.lv2
+          cp build/electropiano.lv2/electropiano.dll build/electropiano.lv2/*.ttl dist/electropiano.lv2/
+          cp README.md LICENSE dist/
+          cp docs/MANUAL.md dist/MANUAL.md
+          cd dist && 7z a ../electropiano-v${{ env.PHS_VERSION }}-Windows-x64.zip *
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electropiano-Windows
+          path: electropiano-v${{ env.PHS_VERSION }}-Windows-x64.zip
+
+  # ===========================================================================
+  # Linux: CLAP, VST3, LV2 (x64, X11)
+  # ===========================================================================
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          # Compiler errors are re-emitted as annotations so they are visible without signing in
+          set -o pipefail
+          cmake --build build --target electropiano_CLAP electropiano_VST3 electropiano_LV2 test_phs_piano test_wurli_port -j$(nproc) -- -k 2>&1 | tee build.log || {
+            grep -E "error:" build.log | sort -u | head -40 | sed 's/^/::error::/'; exit 1; }
+
+      - name: Test
+        run: |
+          ./build/test_wurli_port
+          ./build/test_phs_piano
+
+      - name: Package
+        run: |
+          mkdir -p dist/electropiano.vst3/Contents/x86_64-linux
+          cp build/electropiano.clap dist/
+          cp build/electropiano.vst3 dist/electropiano.vst3/Contents/x86_64-linux/electropiano.so
+          cp -R build/electropiano.lv2 dist/
+          cp README.md LICENSE dist/
+          cp docs/MANUAL.md dist/MANUAL.md
+          tar -czf electropiano-v${{ env.PHS_VERSION }}-Linux-x64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electropiano-Linux
+          path: electropiano-v${{ env.PHS_VERSION }}-Linux-x64.tar.gz
+
+  # ===========================================================================
+  # Sound regression (pull requests): every factory preset is rendered by the base branch and
+  # by the pull request on the same machine and compared sample by sample. A deliberate sound
+  # change is accepted by giving the pull request the "sound change" label.
+  # ===========================================================================
+  sound-regression:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Render the base branch
+        run: |
+          git worktree add ../base ${{ github.event.pull_request.base.sha }}
+          if [ -f ../base/tools/bench_engine.cpp ]; then
+            g++ -std=c++17 -O3 -ffast-math ../base/tools/bench_engine.cpp -o base_bench
+            mkdir -p ref && ./base_bench --quick --save ref
+          else
+            echo "The base branch has no bench_engine yet: nothing to compare against"; touch no_base
+          fi
+
+      - name: Compare the pull request
+        run: |
+          [ -f no_base ] && exit 0
+          g++ -std=c++17 -O3 -ffast-math tools/bench_engine.cpp -o head_bench
+          set +e
+          ./head_bench --quick --compare ref --fail-above 1e-4 | tee result.txt
+          status=${PIPESTATUS[0]}
+          { echo '### Sound regression'; echo '```'; cat result.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          if [ $status = 2 ] && ${{ contains(github.event.pull_request.labels.*.name, 'sound change') }}; then
+            echo "::notice::The sound changed, and the pull request is labelled 'sound change'"; exit 0; fi
+          exit $status
+
+  # ===========================================================================
+  # GitHub Release for version tags
+  # ===========================================================================
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: electropiano ${{ github.ref_name }}
+          body_path: docs/RELEASE_NOTES.md
+          files: artifacts/*
