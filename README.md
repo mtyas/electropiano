@@ -87,6 +87,14 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 <td align="center">Compressor and limiter</td>
 <td align="center">Scope: tine, hammer, pickup field, amp</td>
 </tr>
+<tr>
+<td><img src="docs/images/editor_play.png" alt="Play page"></td>
+<td><img src="docs/images/editor_space.png" alt="Space page"></td>
+</tr>
+<tr>
+<td align="center">Play: Scala microtuning, pedals and realism, A/B, zoom</td>
+<td align="center">Space: cabinets, studio hall / plate / spring reverb, echo, chorus</td>
+</tr>
 </table>
 
 ## The signal chain

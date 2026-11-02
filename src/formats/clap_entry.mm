@@ -34,7 +34,7 @@ static const clap_plugin_descriptor_t kClapDescriptor = {
     "https://mtyas.com",
     "https://mtyas.com",
     "https://ko-fi.com/mtyas",
-    "0.79",
+    PHS_VERSION_STRING,
     "electropiano by mtyas - Port-Hamiltonian Rhodes & Wurlitzer Physical Model",
     kClapFeatures
 };

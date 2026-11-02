@@ -1,6 +1,6 @@
 # electropiano — User Manual
 
-**Version 0.79** · by Matthew Tyas (mtyas) · GPL-3.0
+**Version 0.81** · by Matthew Tyas (mtyas) · GPL-3.0
 
 ![electropiano with a Rhodes Mk I preset and a chord held](images/editor_sound.png)
 
@@ -427,6 +427,8 @@ Because the physics is real, you can watch it:
 ---
 
 ## 12b. Play: tuning, pedals and realism
+
+![The Play page](images/editor_play.png)
 
 ### Tuning and microtuning
 

@@ -8,6 +8,7 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# PHS_VERSION (archive names) is read from src/dsp/PhsVersion.hpp by each build job's Version step
 jobs:
   # ===========================================================================
   # macOS: CLAP, VST3, AU, LV2, standalone app (Universal: arm64 + x86_64)
@@ -16,6 +17,10 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
 
       - name: Build and test (universal)
         run: make test ARCHS="arm64;x86_64"
@@ -27,12 +32,12 @@ jobs:
           cp -R build/electropiano.clap build/electropiano.vst3 build/electropiano.component build/electropiano.app build/electropiano.lv2 dist/
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          cd dist && ditto -c -k --sequesterRsrc . ../electropiano-v0.79-macOS-Universal.zip
+          cd dist && ditto -c -k --sequesterRsrc . ../electropiano-v${{ env.PHS_VERSION }}-macOS-Universal.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-macOS
-          path: electropiano-v0.79-macOS-Universal.zip
+          path: electropiano-v${{ env.PHS_VERSION }}-macOS-Universal.zip
 
   # ===========================================================================
   # Windows: CLAP, VST3, LV2 (x64)
@@ -41,6 +46,10 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
 
       - name: Configure
         run: cmake -B build -G "Visual Studio 17 2022" -A x64
@@ -72,12 +81,12 @@ jobs:
           cp build/electropiano.lv2/electropiano.dll build/electropiano.lv2/*.ttl dist/electropiano.lv2/
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          cd dist && 7z a ../electropiano-v0.79-Windows-x64.zip *
+          cd dist && 7z a ../electropiano-v${{ env.PHS_VERSION }}-Windows-x64.zip *
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-Windows
-          path: electropiano-v0.79-Windows-x64.zip
+          path: electropiano-v${{ env.PHS_VERSION }}-Windows-x64.zip
 
   # ===========================================================================
   # Linux: CLAP, VST3, LV2 (x64, X11)
@@ -86,6 +95,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: echo "PHS_VERSION=$(sed -n 's/^#define PHS_VERSION_STRING "\(.*\)"/\1/p' src/dsp/PhsVersion.hpp)" >> "$GITHUB_ENV"
 
       - name: Dependencies
         run: |
@@ -115,12 +128,12 @@ jobs:
           cp -R build/electropiano.lv2 dist/
           cp README.md LICENSE dist/
           cp docs/MANUAL.md dist/MANUAL.md
-          tar -czf electropiano-v0.79-Linux-x64.tar.gz -C dist .
+          tar -czf electropiano-v${{ env.PHS_VERSION }}-Linux-x64.tar.gz -C dist .
 
       - uses: actions/upload-artifact@v4
         with:
           name: electropiano-Linux
-          path: electropiano-v0.79-Linux-x64.tar.gz
+          path: electropiano-v${{ env.PHS_VERSION }}-Linux-x64.tar.gz
 
   # ===========================================================================
   # Sound regression (pull requests): every factory preset is rendered by the base branch and

@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
             playChord(engine, {40, 47, 52, 56, 59, 64});
             auto settle = [&]() { for (int i = 0; i < 40; ++i) engine.processBlock(l, r, 512); };
             settle();
-            const float tabX[7] = {55, 125, 198, 276, 338, 413, 499};
+            const float tabX[8] = {52, 116, 182, 253, 309, 376, 453, 514};
             auto page = [&](int i, const char* name) {
                 ed->mouseDown(tabX[i], 655, false, 20.0 + i);
                 settle();
@@ -134,6 +134,14 @@ int main(int argc, char** argv) {
             page(4, "editor_eq.png");
             page(5, "editor_dynamics.png");
             page(6, "editor_scope.png");
+            // Play: just intonation loaded (the tuning arrow), a played-in instrument, a little spread
+            engine.setParamNormalized(kParamCondition, 0.35f);
+            engine.setParamNormalized(kParamStereoSpread, 0.4f);
+            page(7, "editor_play.png");
+            ed->mouseDown(416, 566, false, 45.0);
+            settle();
+            shoot(view, "editor_play.png");
+            engine.getTuning().resetToEqual();
             ed->mouseDown(tabX[0], 655, false, 50.0);
             shoot(view, "editor_sound.png");
             engine.setParamNormalized(kParamMpeMode, 0.0f);

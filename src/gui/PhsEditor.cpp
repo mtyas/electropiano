@@ -840,7 +840,7 @@ void Editor::drawSaveDialog(Canvas& c) {
 void Editor::drawAbout(Canvas& c) {
     aboutRect_ = modalFrame(c, 560.0f, 440.0f, "electropiano", aboutClose_);
     const Rect& m = aboutRect_;
-    c.drawText("by mtyas  \xC2\xB7  v0.79  \xC2\xB7  GPL-3.0", m.x + 28.0f + c.textWidth("electropiano", kModalTitle), m.maxY() - 31.0f, kAboutBy, kAccent);
+    c.drawText("by mtyas  \xC2\xB7  v" PHS_VERSION_STRING "  \xC2\xB7  GPL-3.0", m.x + 28.0f + c.textWidth("electropiano", kModalTitle), m.maxY() - 31.0f, kAboutBy, kAccent);
 
     const float x = m.x + 24.0f, w = m.w - 48.0f;
     float y = m.maxY() - 78.0f;

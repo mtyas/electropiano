@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PhsVersion.hpp"
 #include <cstdint>
 #include <cstring>
 #include <cstdio>

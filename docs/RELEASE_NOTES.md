@@ -1,4 +1,11 @@
-## electropiano — next release: playing, tuning, space and formats
+## electropiano v0.81 — playing, tuning, space and formats
+
+Physically modelled **Rhodes** and **Wurlitzer 200A** electric pianos, built from stages you can swap.
+This release is about playing it like the real thing, tuning it any way you like, and running it
+everywhere: CLAP, VST3 and now **LV2** on macOS, Windows and Linux; Audio Unit and a standalone app
+on macOS.
+
+![The new Play page](https://raw.githubusercontent.com/mtyas/electropiano/main/docs/images/editor_play.png)
 
 ### Playing
 - **Sample-accurate** notes and automation in **VST3** and **Audio Unit** (CLAP already was): timing
@@ -42,6 +49,18 @@
 
 **Projects saved with 0.79 load with the same settings and reverb**; the new controls start at
 values that leave the old sound unchanged.
+
+### Downloads
+
+| File | Contents |
+|---|---|
+| `electropiano-v0.81-macOS-Universal.zip` | CLAP, VST3, AU, LV2, standalone app (Apple Silicon + Intel) |
+| `electropiano-v0.81-Windows-x64.zip` | CLAP, VST3, LV2 |
+| `electropiano-v0.81-Linux-x64.tar.gz` | CLAP, VST3, LV2 (X11) |
+
+Installation and every control are explained in the
+[user manual](https://github.com/mtyas/electropiano/blob/main/docs/MANUAL.md). The macOS builds are
+not notarised yet: see *Installing* in the manual if macOS blocks them.
 
 ---
 

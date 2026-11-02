@@ -727,7 +727,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         std::snprintf(info->vendor, sizeof(info->vendor), "mtyas");
-        std::snprintf(info->version, sizeof(info->version), "0.79");
+        std::snprintf(info->version, sizeof(info->version), "%s", PHS_VERSION_STRING);
         std::snprintf(info->sdkVersion, sizeof(info->sdkVersion), "VST 3.7.8");
         return kResultOk;
     }
@@ -742,7 +742,7 @@ public:
         info->classFlags = 0;
         std::snprintf(info->subCategories, sizeof(info->subCategories), "Instrument|Synth|Piano");
         copyAsciiToUtf16(info->vendor, "mtyas", 64);
-        copyAsciiToUtf16(info->version, "0.79", 64);
+        copyAsciiToUtf16(info->version, PHS_VERSION_STRING, 64);
         copyAsciiToUtf16(info->sdkVersion, "VST 3.7.8", 64);
         return kResultOk;
     }

@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
       << "    doap:name \"electropiano\" ;\n"
       << "    doap:license <https://www.gnu.org/licenses/gpl-3.0> ;\n"
       << "    doap:maintainer [ foaf:name \"mtyas\" ; foaf:homepage <https://mtyas.com> ] ;\n"
-      << "    lv2:minorVersion 79 ; lv2:microVersion 0 ;\n"
+      << "    lv2:minorVersion " << PHS_VERSION_MINOR << " ; lv2:microVersion 0 ;\n"
       << "    lv2:requiredFeature urid:map ;\n"
       << "    lv2:optionalFeature lv2:hardRTCapable ;\n"
       << "    lv2:extensionData state:interface ;\n"

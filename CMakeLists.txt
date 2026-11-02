@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
-project(electropiano VERSION 0.79 LANGUAGES C CXX)
+# The version lives in src/dsp/PhsVersion.hpp
+file(STRINGS src/dsp/PhsVersion.hpp PHS_VERSION_LINE REGEX "^#define PHS_VERSION_STRING")
+string(REGEX MATCH "\"([0-9.]+)\"" _ "${PHS_VERSION_LINE}")
+project(electropiano VERSION ${CMAKE_MATCH_1} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
