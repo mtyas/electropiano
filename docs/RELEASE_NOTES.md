@@ -1,3 +1,31 @@
+## electropiano v0.82 — sustain pedal fix
+
+A bug-fix release for 0.81. **Everyone on 0.81 should update.**
+
+### Fixed
+- **Sustain pedal thump and loudness jumps.** With the pedal, the level could swell suddenly when it
+  went down (up to clipping on the 200A presets), and releasing it over held or ringing notes gave a
+  loud thump. Both came from the new sympathetic resonance: its resonators switched between damped
+  and undamped in a single sample, and its coupling was far too strong for overtones that land
+  exactly on another key's pitch. The resonators are rebuilt so the dampers glide on and off over
+  about 40 ms without a click, and the resonance now sits well under the notes (about 34 dB at the
+  default 20 %, 20 dB at 100 %), as sympathetic strings do. Pedal moves are now as clean as in 0.79.
+
+Projects saved with 0.81 load unchanged; where they used **Sympathetic**, its resonance is now
+quieter and cleaner.
+
+### Downloads
+
+| File | Contents |
+|---|---|
+| `electropiano-v0.82-macOS-Universal.zip` | CLAP, VST3, AU, LV2, standalone app (Apple Silicon + Intel) |
+| `electropiano-v0.82-Windows-x64.zip` | CLAP, VST3, LV2 |
+| `electropiano-v0.82-Linux-x64.tar.gz` | CLAP, VST3, LV2 (X11) |
+
+Everything new in 0.81 (microtuning, pedals, LV2, the resizable editor and more) is described below.
+
+---
+
 ## electropiano v0.81 — playing, tuning, space and formats
 
 Physically modelled **Rhodes** and **Wurlitzer 200A** electric pianos, built from stages you can swap.
