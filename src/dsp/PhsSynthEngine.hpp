@@ -1099,7 +1099,7 @@ private:
     SympatheticBank symp_;
     float sympKeyTune_ = -1.0f;
     uint32_t sympTuningGen_ = 0;
-    static constexpr float kSympatheticGain = 12.0f;
+    static constexpr float kSympatheticGain = 0.12f;
     float modWheel_ = 0.0f;
     float bpm_ = 120.0f;
 

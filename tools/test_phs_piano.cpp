@@ -1254,7 +1254,8 @@ bool testPlayability() {
         if (sounding > 8) { std::fprintf(stderr, "  !! polyphony limit ignored\n"); ok = false; }
     }
 
-    // Sympathetic resonance: adds a little with the pedal down, nothing with it up
+    // Sympathetic resonance: with the pedal down it adds a resonance of its own, well below the
+    // notes (colour, not level); with the pedal up it adds nothing
     {
         auto play = [&](float amount, int pedal) {
             auto e = fresh(0);
@@ -1265,14 +1266,50 @@ bool testPlayability() {
             renderMono(*e, static_cast<int>(0.2f * fs));
             e->noteOff(48);
             e->noteOff(55);
-            const auto x = renderMono(*e, static_cast<int>(1.0f * fs));
-            return std::make_pair(rmsOf(x, 0, x.size()), allFinite(x));
+            return renderMono(*e, static_cast<int>(1.0f * fs));
         };
-        const auto off = play(0.0f, 127), on = play(0.3f, 127), upOff = play(0.0f, 0), upOn = play(1.0f, 0);
-        const float gainDb = 20.0f * std::log10(on.first / off.first);
-        std::printf("  -> sympathetic 30%% (pedal down): %+.2f dB | 100%% pedal up: %+.2f dB\n", gainDb, 20.0f * std::log10(upOn.first / upOff.first));
-        if (!on.second || gainDb < 0.2f || gainDb > 4.0f || std::fabs(20.0f * std::log10(upOn.first / upOff.first)) > 0.5f) {
+        // Level of what the resonance adds, relative to the notes themselves (dB)
+        auto addedDb = [&](const std::vector<float>& with, const std::vector<float>& without) {
+            double d = 0.0, s0 = 0.0;
+            for (size_t i = 0; i < with.size(); ++i) { d += double(with[i] - without[i]) * (with[i] - without[i]); s0 += double(without[i]) * without[i]; }
+            return 10.0 * std::log10(d / (s0 + 1e-30) + 1e-30);
+        };
+        const auto off = play(0.0f, 127), on = play(0.2f, 127), full = play(1.0f, 127), upOff = play(0.0f, 0), upOn = play(1.0f, 0);
+        const double atDefault = addedDb(on, off), atFull = addedDb(full, off), pedalUp = addedDb(upOn, upOff);
+        std::printf("  -> sympathetic resonance re the notes: 20%% %.1f dB | 100%% %.1f dB | pedal up %.1f dB\n", atDefault, atFull, pedalUp);
+        if (!allFinite(full) || atDefault < -45.0 || atDefault > -15.0 || atFull > -3.0 || pedalUp > -60.0) {
             std::fprintf(stderr, "  !! sympathetic resonance level out of range\n"); ok = false;
+        }
+    }
+
+    // The pedal must not click or swell: moving it over a held chord, with sympathetic resonance
+    // at its default and at full, steps no harder than the playing itself and stays near the level
+    {
+        for (int preset : {0, 1, 8}) {
+            for (float symp : {0.2f, 1.0f}) {
+                auto e = fresh(preset);
+                e->setParamNormalized(phs::kParamSympathetic, symp);
+                std::vector<float> l;
+                auto run = [&](int n) { const auto x = renderMono(*e, n); l.insert(l.end(), x.begin(), x.end()); };
+                auto step = [&](size_t a, size_t n) { float p = 0; for (size_t i = a + 1; i < a + n; ++i) p = std::max(p, std::fabs(l[i] - l[i - 1])); return p; };
+                auto peak = [&](size_t a, size_t n) { float p = 0; for (size_t i = a; i < a + n; ++i) p = std::max(p, std::fabs(l[i])); return p; };
+                e->noteOn(48, 0.9f); e->noteOn(55, 0.8f); e->noteOn(64, 0.8f);
+                run(24000);
+                const float before = peak(12000, 12000);
+                size_t t = l.size();
+                e->handleMidiEvent(0xB0, 64, 127);
+                run(48000);
+                const float swell = peak(t, 48000) / before;
+                t = l.size();
+                e->handleMidiEvent(0xB0, 64, 0);
+                run(4800);
+                const float click = step(t, 480) / step(t - 2400, 2400);
+                std::printf("  -> pedal, preset %d, sympathetic %.0f%%: level x%.2f with the pedal down, step at release x%.2f\n",
+                            preset, symp * 100.0f, swell, click);
+                if (click > 2.0f || swell > (symp < 0.5f ? 1.15f : 1.7f)) {
+                    std::fprintf(stderr, "  !! the sustain pedal clicks or swells\n"); ok = false;
+                }
+            }
         }
     }
 
