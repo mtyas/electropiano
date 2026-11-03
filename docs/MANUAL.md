@@ -22,8 +22,7 @@ reed on a Rhodes pickup, and every combination in between.
 On top of the instruments sits a modern production layer: **per-note MPE expression**, a
 **modulation matrix** with two LFOs, "impossible instrument" **macros** (tine material, several
 pickups, audio-rate gap FM, tine-to-reed morphing), a miked **cabinet** section, a four-band
-**mastering EQ**, a full **compressor and limiter**, and a **scope** that shows the hammer, the
-pickup field and the amp saturating in real time.
+**mastering EQ** and a full **compressor and limiter**.
 
 ---
 
@@ -40,8 +39,7 @@ pickup field and the amp saturating in real time.
 9. [Macros: the impossible instrument](#9-macros-the-impossible-instrument)
 10. [Space: reverb, echo and cabinets](#10-space-reverb-echo-and-cabinets)
 11. [Mastering EQ and dynamics](#11-mastering-eq-and-dynamics)
-12. [Scope](#12-scope)
-12b. [Play: tuning, pedals and realism](#12b-play-tuning-pedals-and-realism)
+12. [Play: tuning, pedals and realism](#12-play-tuning-pedals-and-realism)
 13. [Presets](#13-presets)
 14. [Playing, MIDI and automation](#14-playing-midi-and-automation)
 15. [Tips for sound design](#15-tips-for-sound-design)
@@ -119,7 +117,6 @@ of the polyphony, the **output meters** (peak L / R) and the compressor's gain r
 | **Space** | Cabinets and microphone, reverb and tape echo. |
 | **EQ** | A four-band parametric mastering equaliser with an interactive curve and live spectrum. |
 | **Dynamics** | Compressor and output limiter, with transfer curve and gain-reduction history. |
-| **Scope** | The tine and hammer, the pickup field and the amp's saturation, live. |
 | **Play** | Tuning and microtuning (Scala), transpose, polyphony, condition, sympathetic resonance, key spread, A/B compare and zoom. |
 
 ### Knobs
@@ -312,9 +309,10 @@ Because every part is simulated, you can go beyond what metal and magnets allow.
 
 | Control | What it does |
 |---|---|
-| **Material** | Steel → glass → carbon fibre. Longer ring, stretched bell overtones and a brighter chime as you move right. Works on tines and reeds. |
+| **Material** | Steel → glass → carbon fibre. Longer ring, stretched, inharmonic bell overtones and a louder chime as you move right, even with Chime turned low. Works on tines and reeds. |
 | **Pickups / Spread** | One to four magnetic pickups along the tine, summed in phase. **Spread** sets how far apart they are. The single-pickup bark gives way to a comb-like blend. Magnetic pickup only. |
 | **Gap FM / Ratio** | Swings the pickup gap and offset at an audio-rate multiple of every note's pitch (0.25× – 8×). A little adds shimmer; a lot is bell-like FM. It stays in tune because it follows the note. |
+| **Ratio Mode** | *Free* sweeps the ratio continuously; *Exact* snaps it to 1:4, 1:2, 1:1, 2:1, 3:1 … 8:1 for harmonic, tuned FM tones. |
 | **Morph** | Crossfades from the selected resonator to the other one **while the note rings**: a tine becomes a reed, or the other way round. Have Morph above zero when you play the note; automate or modulate it to sweep. |
 
 The **partial map** on the right shows the resonator's overtones (height = level, brightness =
@@ -410,23 +408,7 @@ The **Output Limiter** sits after the master volume: switch it on and nothing le
 
 ---
 
-## 12. Scope
-
-![The Scope page](images/editor_scope.png)
-
-Because the physics is real, you can watch it:
-
-- **Tine & Hammer**: the tine bends like a cantilever; the hammer rises into it, squashes its felt at
-  the moment of contact and drops away. Deflection is exaggerated to fill the view.
-- **Pickup Field**: the magnet (or several, with the Pickups macro), the field around it and the tine
-  tip moving through it, with the gap and offset in millimetres. Gap FM makes it visibly wobble. On the
-  electrostatic pickup it shows the reed swinging through the comb.
-- **Amp Saturation**: the preamp's transfer curve with a live dot for the signal level and input and
-  output peak meters. Turn **Drive** up and watch the curve bend.
-
----
-
-## 12b. Play: tuning, pedals and realism
+## 12. Play: tuning, pedals and realism
 
 ![The Play page](images/editor_play.png)
 

@@ -141,6 +141,7 @@ public:
         cabModel_.reset();
         eqKey_ = -1.0f;
         for (auto& ch : eqBq_) for (auto& b : ch) b.reset();
+        for (auto& a : eqActive_) a = false;
         scLpL_ = scLpR_ = rmsState_ = compGr_ = 0.0f;
         limGain_ = 1.0f;
         os1_.reset();
@@ -505,7 +506,14 @@ public:
                 const bool active = std::fabs(eqGainDb(params[kEqGainId[b]])) > 0.05f;
                 if (changed) {
                     setupEqBand(eqBq_[0][b], b, params, fs_);
-                    eqBq_[1][b] = eqBq_[0][b]; // same coefficients, own state (copying is cheap)
+                    eqBq_[1][b].copyCoefficients(eqBq_[0][b]); // same coefficients, own state
+                }
+                if (active != eqActive_[b]) {
+                    // A band switches in at ~0 dB, where it is near-transparent: start it from rest,
+                    // not from whatever it held when it last switched out
+                    eqActive_[b] = active;
+                    eqBq_[0][b].reset();
+                    eqBq_[1][b].reset();
                 }
                 if (active) {
                     sigL = static_cast<float>(eqBq_[0][b].process(sigL));
@@ -767,6 +775,7 @@ private:
     CabinetModel cabModel_;
     wurli::Biquad eqBq_[2][4];
     float eqKey_ = -1.0f;
+    bool eqActive_[4] = {};
     float scLpL_ = 0.0f, scLpR_ = 0.0f, rmsState_ = 0.0f, compGr_ = 0.0f, compLevelDb_ = -90.0f;
     float limGain_ = 1.0f;
     // Cached coefficients, recomputed when their knob moves

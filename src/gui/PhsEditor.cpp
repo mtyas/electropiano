@@ -326,6 +326,9 @@ std::string Editor::valueText(uint32_t id, float norm, const Stages& c) const {
         case kParamPickupResonance:
             if (c.electrostatic) { std::snprintf(buf, sizeof(buf), "%.0f pF", 240.0f * std::pow(2.0f, (0.45f - norm) * 2.0f)); return buf; }
             break;
+        case kParamGapFmRatio:
+            formatGapFmRatio(norm, stepIndex(engine_ ? engine_->getParamNormalized(kParamGapFmExact) : 0.0f, 1) == 1, buf, sizeof(buf));
+            return buf;
         case kParamPreampDrive:
             if (c.amp200A) { std::snprintf(buf, sizeof(buf), "%.0f%%", wurliVolumePot(norm) * 100.0); return buf; }
             break;
@@ -1008,7 +1011,7 @@ void Editor::mouseDown(float x, float y, bool fine, double timeSec) {
             return;
         }
     }
-    if (page_ == 7 && mouseDownPlay(x, y)) return;
+    if (page_ == 6 && mouseDownPlay(x, y)) return;
 
     if (pedal_.contains(x, y)) {
         sendMidi(0xB0, 64, (engine_ && engine_->isSustainActive()) ? 0 : 127);
@@ -1245,12 +1248,12 @@ uint64_t Editor::stateHash() const {
         mixIn(static_cast<uint64_t>(engine_->getPresetManager().getPresetCount()));
         mixIn(static_cast<uint64_t>(page_));
         mixIn(listOpen_);
-        // Meters move in small steps; the scope page animates every frame while notes ring
+        // Meters move in small steps; the EQ page animates every frame while notes ring
         const ScopeSnapshot& sc = engine_->getScopeSnapshot();
         mixIn(static_cast<uint64_t>(sc.meterL * 400.0f));
         mixIn(static_cast<uint64_t>(sc.meterR * 400.0f));
         mixIn(static_cast<uint64_t>(-sc.gainReductionDb * 4.0f));
-        if (page_ == 6 || page_ == 4) mixIn(sc.writePos);
+        if (page_ == 4) mixIn(sc.writePos);
         mixIn(static_cast<uint64_t>(sc.cpuLoad * 100.0f));
         mixIn(static_cast<uint64_t>(sc.activeVoices * 1000 + sc.polyphony));
         mixIn(engine_->getTuning().generation());
@@ -1468,13 +1471,13 @@ void Editor::drawMeter(Canvas& c, const Rect& r, float level, bool reverse) {
 }
 
 // =============================================================================
-// PAGES: Sound (the instrument panels), Modulation, Macros, Studio, Scope.
+// PAGES: Sound (the instrument panels), Modulation, Macros, Space, EQ, Dynamics, Play.
 // Every page fills the same 868 x 502 area under the page bar, so the header, signal
 // chain, keyboard and output meters stay put and the plugin reads as one instrument.
 // =============================================================================
 void Editor::drawPageBar(Canvas& c) {
-    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "SPACE", "EQ", "DYNAMICS", "SCOPE", "PLAY"};
-    static const float widths[kNumPages] = {72.0f, 56.0f, 76.0f, 66.0f, 46.0f, 88.0f, 66.0f, 56.0f};
+    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "SPACE", "EQ", "DYNAMICS", "PLAY"};
+    static const float widths[kNumPages] = {72.0f, 56.0f, 76.0f, 66.0f, 46.0f, 88.0f, 56.0f};
     float x = 16.0f;
     const float y = pageBarY_, h = 30.0f;
     float total = 0.0f;
@@ -1521,8 +1524,7 @@ void Editor::drawPage(Canvas& c) {
         case 3: drawLabSpace(c, area); break;
         case 4: drawLabEq(c, area); break;
         case 5: drawLabDynamics(c, area); break;
-        case 6: drawLabScope(c, area); break;
-        case 7: drawLabPlay(c, area); break;
+        case 6: drawLabPlay(c, area); break;
         default: break;
     }
     for (size_t i = 0; i < modKnobs_.size(); ++i) drawKnob(c, modKnobs_[i], draggedModKnob_ == static_cast<int>(i));
@@ -1603,7 +1605,7 @@ void Editor::drawLabMod(Canvas& c, const Rect& area) {
 void Editor::drawLabMacros(Canvas& c, const Rect& area) {
     const Rect card{area.x, area.maxY() - 150.0f, area.w, 150.0f};
     drawCard(c, card, "IMPOSSIBLE INSTRUMENT");
-    const float cw = card.w / 6.0f;
+    const float cw = card.w / 7.0f;
     auto knobAt = [&](int col, uint32_t id) {
         modKnobs_.push_back({id, {card.x + cw * col + 9.0f, card.y + 10.0f, cw - 18.0f, 89.0f}, 23.0f, false});
     };
@@ -1611,18 +1613,20 @@ void Editor::drawLabMacros(Canvas& c, const Rect& area) {
     knobAt(2, kParamPickupSpread);
     knobAt(3, kParamGapFmDepth);
     knobAt(4, kParamGapFmRatio);
-    knobAt(5, kParamResMorph);
+    knobAt(6, kParamResMorph);
     drawCentered(c, "Pickups", {card.x + cw, card.y + 76.0f, cw, 14.0f}, kKnobLabel, kTextPrimary);
     addStepper(c, {card.x + cw + 14.0f, card.y + 44.0f, cw - 28.0f, 26.0f}, kParamPickupCount);
+    drawCentered(c, "Ratio Mode", {card.x + cw * 5, card.y + 76.0f, cw, 14.0f}, kKnobLabel, kTextPrimary);
+    addStepper(c, {card.x + cw * 5 + 14.0f, card.y + 44.0f, cw - 28.0f, 26.0f}, kParamGapFmExact);
 
     const Rect help{area.x, area.y, 560.0f, area.h - 150.0f - 8.0f};
     drawPartialMap(c, {area.x + 568.0f, area.y, area.w - 568.0f, help.h});
     drawCard(c, help, "WHAT THEY DO");
     float y = help.maxY() - 46.0f;
     const struct { const char* head; const char* body; } items[] = {
-        {"Material", "Steel to glass to carbon fibre. A longer ring, stretched bell overtones and a brighter chime as the knob moves right. Applies to tines and reeds."},
+        {"Material", "Steel to glass to carbon fibre. A longer ring, stretched, inharmonic bell overtones and a louder chime as the knob moves right, even with the Chime knob low. Applies to tines and reeds."},
         {"Pickups and Spread", "Put one to four magnetic pickups along the tine and sum them in phase; Spread sets how far apart they sit. The tine's bark moves from the single-pickup law to a comb-like blend. (Magnetic pickup only.)"},
-        {"Gap FM and Ratio", "Swings the pickup gap and offset at an audio-rate multiple of every note's pitch. Small amounts add shimmer; large amounts turn into bell-like FM, and it stays tuned because it follows the note."},
+        {"Gap FM and Ratio", "Swings the pickup gap and offset at an audio-rate multiple of every note's pitch. Small amounts add shimmer; large amounts turn into bell-like FM, and it stays tuned because it follows the note. Ratio Mode Exact snaps the ratio to 1:4, 1:2, 1:1, 2:1 .. 8:1 for harmonic tones."},
         {"Morph", "Crossfades from the selected resonator (tine or reed) to the other one while the note rings. Have it above zero when you play the note; automate or modulate it to sweep from Rhodes to Wurlitzer within a held chord."}};
     for (const auto& it : items) {
         c.drawText(it.head, help.x + 20.0f, y, kAboutHead, kTextPrimary);
@@ -1902,7 +1906,7 @@ void Editor::drawPartialMap(Canvas& c, const Rect& card) {
     c.strokeRoundRect(plot, 6.0f, kPanelBorder, 1.0f);
     if (!engine_) return;
     auto P = [&](uint32_t id) { return engine_->getParamNormalized(id); };
-    const float mat = P(kParamMaterial), bell = P(kParamTineBell), tb = P(kParamToneBarCoupling);
+    const float mat = P(kParamMaterial), bell = std::min(1.0f, P(kParamTineBell) + materialBellLift(mat)), tb = P(kParamToneBarCoupling);
     const float stretch = materialBellStretch(mat), chime = materialChimeMul(mat);
     // ratio, relative level, ring time (s)
     const float base = tineBaseT60(P(kParamTineDecay)) * materialDecayMul(mat);
@@ -1927,19 +1931,6 @@ void Editor::drawPartialMap(Canvas& c, const Rect& card) {
     c.drawText("height = level (36 dB range), brightness = ring time", card.x + 16.0f, card.y + 10.0f, kLinkSub, kTextDim);
 }
 
-
-void Editor::drawLabScope(Canvas& c, const Rect& area) {
-    const Rect tine{area.x, area.maxY() - 215.0f, area.w, 215.0f};
-    drawCard(c, tine, stages().reed ? "REED & HAMMER" : "TINE & HAMMER");
-    drawTineView(c, tine);
-    const float h = area.h - 215.0f - 8.0f, w = (area.w - 8.0f) * 0.5f;
-    const Rect pick{area.x, area.y, w, h};
-    const Rect amp{area.x + w + 8.0f, area.y, w, h};
-    drawCard(c, pick, stages().electrostatic ? "ELECTROSTATIC PICKUP FIELD" : "MAGNETIC PICKUP FIELD");
-    drawPickupView(c, pick);
-    drawCard(c, amp, "AMP SATURATION");
-    drawAmpView(c, amp);
-}
 
 void Editor::openList(uint32_t id, const Rect& anchor) {
     listOpen_ = true;
@@ -1994,135 +1985,6 @@ bool Editor::mouseDownList(float x, float y) {
     }
     listOpen_ = false;
     return true;
-}
-
-void Editor::drawTineView(Canvas& c, const Rect& card) {
-    const Rect area{card.x + 12.0f, card.y + 12.0f, card.w - 24.0f, card.h - 40.0f};
-    c.fillRoundRect(area, 6.0f, kInsetBg);
-    c.strokeRoundRect(area, 6.0f, kPanelBorder, 1.0f);
-    if (!engine_) return;
-    const ScopeSnapshot& sc = engine_->getScopeSnapshot();
-    const float tip = sc.phaseW[(sc.writePos + kScopeRingSize - 1) % kScopeRingSize];
-    tipMax_ = std::max(tipMax_ * 0.99f, std::fabs(tip));
-    holdMax_ = std::max(holdMax_ * 0.995f, sc.hammerHold);
-    const float contact = holdMax_ > 1e-9f ? std::clamp(sc.hammerHold / holdMax_, 0.0f, 1.0f) : 0.0f;
-    const float deflect = tipMax_ > 1e-6f ? tip / tipMax_ * 46.0f : 0.0f;
-
-    const float x0 = area.x + 70.0f, L = area.w - 150.0f, y0 = area.midY() + 6.0f;
-    // Clamp block and tone bar
-    c.fillRoundRect({x0 - 26.0f, y0 - 30.0f, 22.0f, 60.0f}, 4.0f, {0.20f, 0.21f, 0.24f, 1.0f});
-    c.fillRect({x0 - 6.0f, y0 - 14.0f, 6.0f, 28.0f}, {0.30f, 0.31f, 0.34f, 1.0f});
-    // The tine bends like a cantilever: static shape u^2 (3 - u) / 2
-    float px = x0, py = y0;
-    for (int i = 1; i <= 28; ++i) {
-        const float u = i / 28.0f;
-        const float x = x0 + L * u, y = y0 + deflect * u * u * (3.0f - u) * 0.5f;
-        c.strokeLine(px, py, x, y, stages().reed ? Color{0.85f, 0.88f, 0.92f, 1.0f} : kTextPrimary, 4.5f);
-        px = x; py = y;
-    }
-    c.fillCircle(px, py, 4.0f, kAccent);
-    // Hammer: rests below, lifts into the tine at contact and squashes its felt
-    const float xs = x0 + L * strikePositionXL(engine_->getParamNormalized(kParamStrikePosition));
-    const float u = (xs - x0) / L, yTine = y0 + deflect * u * u * (3.0f - u) * 0.5f;
-    const float top = yTine - 4.0f - (1.0f - contact) * 26.0f;
-    c.strokeLine(xs, top - 16.0f, xs, area.y + 10.0f, {0.35f, 0.36f, 0.40f, 1.0f}, 3.0f);
-    c.fillRoundRect({xs - 13.0f, top - 18.0f, 26.0f, 16.0f}, 3.0f, {0.28f, 0.29f, 0.33f, 1.0f});
-    c.fillRoundRect({xs - 13.0f, top - 3.0f - 3.0f * (1.0f - contact), 26.0f, 5.0f - 2.0f * contact}, 2.5f, {0.80f, 0.45f, 0.30f, 1.0f});
-    c.drawText("hammer felt", xs - 28.0f, area.y + 14.0f, kLinkSub, kTextDim);
-    // Pickup marker beside the tip
-    c.strokeLine(x0 + L + 34.0f, y0 - 40.0f, x0 + L + 34.0f, y0 + 40.0f, kTextDim, 1.0f);
-    c.drawText("pickup", x0 + L + 18.0f, area.y + 14.0f, kLinkSub, kTextDim);
-    c.drawText("tine deflection is exaggerated to fill the view", area.x + 10.0f, area.maxY() - 16.0f, kLinkSub, kTextDim);
-}
-
-void Editor::drawPickupView(Canvas& c, const Rect& card) {
-    const Rect area{card.x + 12.0f, card.y + 12.0f, card.w - 24.0f, card.h - 40.0f};
-    c.fillRoundRect(area, 6.0f, kInsetBg);
-    c.strokeRoundRect(area, 6.0f, kPanelBorder, 1.0f);
-    if (!engine_) return;
-    const ScopeSnapshot& sc = engine_->getScopeSnapshot();
-    const float tip = sc.phaseW[(sc.writePos + kScopeRingSize - 1) % kScopeRingSize];
-    const float disp = tipMax_ > 1e-6f ? tip / tipMax_ : 0.0f;
-    const Stages s = stages();
-    const float tx = area.x + area.w * 0.66f;
-    const float cy = area.midY();
-    constexpr float kPxPerMm = 24.0f;
-    const float phase = static_cast<float>(sc.writePos) * 0.045f;
-    const float fm = engine_->getParamNormalized(kParamGapFmDepth);
-
-    if (!s.electrostatic) {
-        const float gapMm = magneticGapMm(engine_->getParamNormalized(kParamPickupDistance));
-        const float offMm = magneticOffsetMm(engine_->getParamNormalized(kParamPickupSymmetry));
-        const int n = pickupCountFromNorm(engine_->getParamNormalized(kParamPickupCount));
-        const float spread = pickupSpreadMm(engine_->getParamNormalized(kParamPickupSpread));
-        const float gapNow = gapMm * (1.0f + 0.6f * fm * std::sin(phase));
-        const float ty = cy + disp * 30.0f;
-        for (int k = 0; k < n; ++k) {
-            const float my = cy + (offMm + k * spread + 0.5f * fm * std::cos(phase)) * kPxPerMm;
-            const float mx = tx - gapNow * kPxPerMm;
-            for (int j = 0; j < 3; ++j) c.strokeArc(mx, my, 20.0f + 11.0f * j, -1.15f, 1.15f, kAccent.withAlpha(0.32f - 0.08f * j), 1.2f);
-            c.fillCircleGradient(mx, my, 14.0f, {0.55f, 0.57f, 0.62f, 1.0f}, {0.22f, 0.23f, 0.26f, 1.0f});
-            c.drawText("N", mx - 3.0f, my - 4.0f, kCcTag, kBlack);
-        }
-        c.fillCircleGradient(tx, ty, 10.0f, {0.92f, 0.93f, 0.96f, 1.0f}, {0.50f, 0.52f, 0.57f, 1.0f});
-        c.strokeLine(tx - gapNow * kPxPerMm + 14.0f, cy + 54.0f, tx - 10.0f, cy + 54.0f, kTextDim, 1.0f);
-        char buf[40];
-        std::snprintf(buf, sizeof(buf), "gap %.2f mm, offset %.2f mm, %d pickup%s", gapNow, offMm, n, n > 1 ? "s" : "");
-        c.drawText(buf, area.x + 10.0f, area.y + 8.0f, kLinkSub, kTextMuted);
-    } else {
-        // Electrostatic: the reed swings past the comb of pickup fingers
-        for (int k = 0; k < 7; ++k) c.fillRect({tx - 60.0f + k * 14.0f, cy - 40.0f, 6.0f, 80.0f}, {0.30f, 0.31f, 0.35f, 1.0f});
-        const float rx = tx - 18.0f + disp * 34.0f * (1.0f + 0.6f * fm * std::sin(phase));
-        c.fillRoundRect({rx - 3.0f, cy - 52.0f, 6.0f, 104.0f}, 3.0f, kAccent);
-        c.drawText("reed swings through the comb; capacitance follows the overlap", area.x + 10.0f, area.y + 8.0f, kLinkSub, kTextMuted);
-    }
-}
-
-void Editor::drawAmpView(Canvas& c, const Rect& card) {
-    const Rect area{card.x + 12.0f, card.y + 12.0f, card.w - 24.0f, card.h - 40.0f};
-    c.fillRoundRect(area, 6.0f, kInsetBg);
-    c.strokeRoundRect(area, 6.0f, kPanelBorder, 1.0f);
-    if (!engine_) return;
-    const ScopeSnapshot& sc = engine_->getScopeSnapshot();
-    const float drive = engine_->getParamNormalized(kParamPreampDrive);
-    const float size = std::min(area.h - 24.0f, area.w * 0.55f);
-    const Rect plot{area.x + 16.0f, area.y + 12.0f, size, size};
-    c.strokeRoundRect(plot, 3.0f, kHairline, 1.0f);
-    c.fillRect({plot.midX() - 0.5f, plot.y, 1.0f, plot.h}, kHairline);
-    c.fillRect({plot.x, plot.midY() - 0.5f, plot.w, 1.0f}, kHairline);
-    constexpr float kRange = 0.8f; // input amplitude shown either side of zero
-    auto toX = [&](float v) { return plot.midX() + v / kRange * plot.w * 0.5f; };
-    auto toY = [&](float v) { return plot.midY() + v / kRange * plot.h * 0.5f; };
-    const bool is200A = stages().amp200A;
-    c.save();
-    c.clip(plot.inset(1.0f, 1.0f));
-    c.strokeLine(toX(-kRange), toY(-kRange), toX(kRange), toY(kRange), kTextDim.withAlpha(0.6f), 1.0f); // linear reference
-    float px = 0, py = 0;
-    for (int i = 0; i <= 64; ++i) {
-        const float x = -kRange + 2.0f * kRange * i / 64.0f;
-        const float y = PhsEffectsChain::suitcaseTransfer(x, drive);
-        if (i > 0) c.strokeLine(px, py, toX(x), toY(y), is200A ? kTextDim : kAccent, 2.0f);
-        px = toX(x); py = toY(y);
-    }
-    const float in = std::min(sc.ampIn, kRange);
-    const float out = PhsEffectsChain::suitcaseTransfer(in, drive);
-    c.glowCircle(toX(in), toY(out), 4.0f, 6.0f, kLearn.withAlpha(0.8f));
-    c.fillCircle(toX(in), toY(out), 4.0f, kLearn);
-    c.fillCircle(toX(-in), toY(-out), 4.0f, kLearn.withAlpha(0.5f));
-    c.restore();
-    c.drawText("in", plot.maxX() - 10.0f, plot.midY() + 4.0f, kLinkSub, kTextDim);
-    c.drawText("out", plot.midX() + 4.0f, plot.maxY() - 10.0f, kLinkSub, kTextDim);
-
-    auto toLevel = [](float v) { return std::clamp((20.0f * std::log10(v + 1e-6f) + 48.0f) / 48.0f, 0.0f, 1.0f); };
-    const float bx = plot.maxX() + 22.0f, bw = area.maxX() - bx - 12.0f;
-    c.drawText("INPUT PEAK", bx, plot.maxY() - 12.0f, kPanelTitle, kTextDim);
-    drawMeter(c, {bx, plot.maxY() - 32.0f, bw, 14.0f}, toLevel(sc.ampIn));
-    c.drawText("OUTPUT PEAK", bx, plot.maxY() - 56.0f, kPanelTitle, kTextDim);
-    drawMeter(c, {bx, plot.maxY() - 76.0f, bw, 14.0f}, toLevel(sc.ampOut));
-    char buf[40];
-    std::snprintf(buf, sizeof(buf), "drive %.0f%%", drive * 100.0f);
-    c.drawText(buf, bx, plot.maxY() - 98.0f, kKnobValue, kTextMuted);
-    if (is200A) c.drawText("200A circuit active: the curve shown is the Suitcase preamp", area.x + 10.0f, area.y - 0.0f + 1.0f, kLinkSub, kTextDim);
 }
 
 // ---- Play: tuning (Scala microtuning), playing realism, polyphony and the editor ------------

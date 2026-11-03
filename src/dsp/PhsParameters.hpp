@@ -101,6 +101,7 @@ enum ParamID : uint32_t {
     kParamStereoSpread,        // Keyboard spread across the stereo field
     kParamReverbPreDelay,      // Reverb pre-delay (0 .. 120 ms)
     kParamChorusMode,          // 0 Dual (two BBD taps), 1 Tri-chorus (three taps, 120 degrees apart)
+    kParamGapFmExact,          // Gap FM ratio: 0 free, 1 snapped to exact ratios (1:4 .. 8:1)
 
     kNumParams
 };
@@ -235,6 +236,7 @@ static constexpr std::array<ParamInfo, kNumParams> kParamMetadata = {{
     {kParamStereoSpread,     "Key Spread",     "KSpread",  "%",   "Output",     0.00f, 0},
     {kParamReverbPreDelay,   "Pre-Delay",      "PreDly",   "ms",  "Effects",    0.10f, 0},
     {kParamChorusMode,       "Chorus Mode",    "ChMode",   "",    "Effects",    1.00f, 1},
+    {kParamGapFmExact,       "Gap FM Exact",   "FMExact",  "",    "Macros",     0.00f, 1},
 }};
 
 // -----------------------------------------------------------------------------
@@ -256,13 +258,31 @@ inline double wurliVolumePot(float driveNorm) { return std::clamp(0.4 + driveNor
 // ---- Expression, modulation and macro mappings -------------------------------
 inline int bendRangeSemis(float norm) { return 1 + stepIndex(norm, 47); }
 inline float lfoRateHz(float norm) { return 0.05f * std::pow(800.0f, norm); }          // 0.05 .. 40 Hz
-inline float materialDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.6f * g + 0.9f * h; }
-inline float materialBellDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.8f * g + 0.7f * h; }
-inline float materialBellStretch(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.10f * g + 0.08f * h; }
-inline float materialChimeMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.25f * g + 0.35f * h; }
+// Material: steel (0) -> glass (0.5) -> carbon fibre (1). g covers the first half, h the second.
+inline float materialDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.8f * g + 1.4f * h; }
+inline float materialBellDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 1.5f * g + 1.5f * h; }
+inline float materialBellStretch(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.18f * g + 0.22f * h; }
+inline float materialChimeMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.9f * g + 1.3f * h; }
+// Added to the Chime knob so the bell overtones the material reshapes are there to hear
+inline float materialBellLift(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 0.30f * g + 0.20f * h; }
 inline int pickupCountFromNorm(float n) { return 1 + stepIndex(n, 3); }
 inline float pickupSpreadMm(float n) { return 1.5f * n; }
 inline float gapFmRatio(float n) { return 0.25f * std::pow(32.0f, n); }                  // 0.25x .. 8x the note
+// Exact mode: the nearest (in pitch) of 1:4, 1:2, 1:1, 2:1 .. 8:1
+inline float gapFmRatioExact(float n) {
+    static constexpr float kRatios[] = {0.25f, 0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
+    const float r = gapFmRatio(n);
+    float best = kRatios[0];
+    for (float k : kRatios) if (std::fabs(std::log(r / k)) < std::fabs(std::log(r / best))) best = k;
+    return best;
+}
+inline float gapFmRatio(float n, bool exact) { return exact ? gapFmRatioExact(n) : gapFmRatio(n); }
+inline void formatGapFmRatio(float n, bool exact, char* out, size_t size) {
+    const float r = gapFmRatio(n, exact);
+    if (!exact) std::snprintf(out, size, "x%.2f", r);
+    else if (r < 1.0f) std::snprintf(out, size, "1:%.0f", 1.0f / r);
+    else std::snprintf(out, size, "%.0f:1", r);
+}
 inline float eqFreqHz(float n) { return 200.0f * std::pow(25.0f, n); }                   // 200 Hz .. 5 kHz
 inline float eqGainDb(float n) { return (n - 0.5f) * 24.0f; }
 inline float eqQ(float n) { return 0.3f * std::pow(33.33f, n); }                         // 0.3 .. 10
@@ -406,6 +426,7 @@ inline void formatParamDisplay(uint32_t id, float n, char* out, size_t size) {
         case kParamPolyphony: std::snprintf(out, size, "%d", polyphonyVoices(n)); return;
         case kParamReverbPreDelay: std::snprintf(out, size, "%.0f ms", preDelayMs(n)); return;
         case kParamChorusMode: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Tri" : "Dual"); return;
+        case kParamGapFmExact: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Exact" : "Free"); return;
         case kParamCabType: {
             static const char* c[10] = {"Speaker (200A)", "Suitcase 4x10", "Twin 2x12 Open", "Deluxe 1x12", "Closed 2x12",
                                         "Studio Condenser", "Ribbon Mic", "Hi-Fi Monitor", "Radio", "Lo-Fi"};

@@ -274,7 +274,7 @@ private:
         gapEff_ = std::clamp(params[kParamPickupDistance] + varGap_ + 0.40f * pressure_ * pressureAmt, 0.0f, 1.0f);
         qEff_ = std::clamp(params[kParamPickupResonance] + 0.55f * (slide_ - 0.5f) * 2.0f * slideAmt, 0.0f, 1.0f);
         fmDepth_ = params[kParamGapFmDepth];
-        fmInc_ = std::min(3.0f, kTwoPi * f0_ * gapFmRatio(params[kParamGapFmRatio]) / fs_);
+        fmInc_ = std::min(3.0f, kTwoPi * f0_ * gapFmRatio(params[kParamGapFmRatio], stepIndex(params[kParamGapFmExact], 1) == 1) / fs_);
         pickupCount_ = pickupCountFromNorm(params[kParamPickupCount]);
         pickupSpreadMm_ = pickupSpreadMm(params[kParamPickupSpread]);
         const float morph = std::clamp(params[kParamResMorph], 0.0f, 1.0f);
@@ -392,11 +392,11 @@ private:
     void updateModalParameters(const float* params) {
         const float xStrike = strikePositionXL(std::clamp(params[kParamStrikePosition] + varStrike_, 0.0f, 1.0f));
         const float decayParam = params[kParamTineDecay];
-        const float bellParam = std::clamp(params[kParamTineBell] + varBell_, 0.0f, 1.0f);
+        const float material = params[kParamMaterial];
+        const float bellParam = std::clamp(params[kParamTineBell] + varBell_ + materialBellLift(material), 0.0f, 1.0f);
         const float toneBarParam = std::clamp(params[kParamToneBarCoupling] + varToneBar_, 0.0f, 1.0f);
         const float hardness = std::clamp(params[kParamHammerHardness] + varHard_, 0.0f, 1.0f);
 
-        const float material = params[kParamMaterial];
         float baseT60 = tineBaseT60(decayParam) * std::pow(0.50f, keyScale_) * materialDecayMul(material) * varDecay_;
         if (modelType_ == 2) baseT60 *= 0.68f; // steel-reed voiced tine
 

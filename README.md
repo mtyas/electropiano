@@ -49,7 +49,6 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 - **Microtuning** — Scala `.scl` / `.kbm` files, built-in historical temperaments and EDOs, MIDI
   Tuning Standard; saved with the project. Master tune, transpose, 8 – 64 voices.
 - **Studio hall and plate reverbs** with pre-delay, a tri-chorus, keyboard stereo spread.
-- **A scope that shows the physics** — the tine and hammer, the pickup field, the amp saturating.
 - **28 factory presets**, including OpenWurli's calibrated 200A and cross-instrument hybrids.
 - **One resizable editor on every platform** (75 – 200 %), MIDI learn, undo/redo, A/B compare,
   a searchable preset browser with favourites, a CPU meter and a playable keyboard.
@@ -68,7 +67,7 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 </tr>
 </table>
 
-## One window, eight pages
+## One window, seven pages
 
 <table>
 <tr>
@@ -81,11 +80,11 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 </tr>
 <tr>
 <td><img src="docs/images/editor_dynamics.png" alt="Compressor and limiter"></td>
-<td><img src="docs/images/editor_scope.png" alt="Scope"></td>
+<td><img src="docs/images/editor_macros.png" alt="Macros"></td>
 </tr>
 <tr>
 <td align="center">Compressor and limiter</td>
-<td align="center">Scope: tine, hammer, pickup field, amp</td>
+<td align="center">Macros: material, pickups, gap FM, morph</td>
 </tr>
 <tr>
 <td><img src="docs/images/editor_play.png" alt="Play page"></td>

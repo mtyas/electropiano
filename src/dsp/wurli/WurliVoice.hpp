@@ -75,6 +75,8 @@ public:
         return y;
     }
     void reset() { z1_ = z2_ = 0.0; }
+    // Takes another filter's response but keeps this filter's state
+    void copyCoefficients(const Biquad& o) { b0_ = o.b0_; b1_ = o.b1_; b2_ = o.b2_; a1_ = o.a1_; a2_ = o.a2_; }
 
 private:
     void setNormalised(double b0, double b1, double b2, double a0, double a1, double a2) {

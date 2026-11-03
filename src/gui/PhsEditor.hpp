@@ -95,14 +95,10 @@ private:
     void drawList(Canvas& c);
     bool mouseDownList(float x, float y);
     void setEqNode(int band, float x, float y);
-    void drawLabScope(Canvas& c, const Rect& area);
     void drawLabPlay(Canvas& c, const Rect& area);
     bool mouseDownPlay(float x, float y);
     void refreshTunings();
     void selectTuning(int index);
-    void drawTineView(Canvas& c, const Rect& card);
-    void drawPickupView(Canvas& c, const Rect& card);
-    void drawAmpView(Canvas& c, const Rect& card);
     void drawMeter(Canvas& c, const Rect& r, float level01, bool reverse = false);
     void drawCard(Canvas& c, const Rect& r, const char* title);
     void drawStepper(Canvas& c, const Rect& r, uint32_t id, bool enabled = true);
@@ -167,14 +163,13 @@ private:
     // Modulation & expression panel
     struct Stepper { uint32_t paramId; Rect rect; };
     struct Slider { uint32_t paramId; Rect rect; };
-    static constexpr int kNumPages = 8;
-    int page_ = 0;                     // 0 Sound, 1 Modulation, 2 Macros, 3 Space, 4 EQ, 5 Dynamics, 6 Scope, 7 Play
+    static constexpr int kNumPages = 7;
+    int page_ = 0;                     // 0 Sound, 1 Modulation, 2 Macros, 3 Space, 4 EQ, 5 Dynamics, 6 Play
     Rect pageTabs_[kNumPages]{};
     float pageBarY_ = 640.0f;
     std::vector<Knob> modKnobs_;
     std::vector<Stepper> modSteppers_;
     std::vector<Slider> modSliders_;
-    float tipMax_ = 0.0f, holdMax_ = 0.0f;
 
     // Dropdown list for stepped parameters (modulation sources and targets, cabinets, sync divisions...)
     bool listOpen_ = false;
