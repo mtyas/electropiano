@@ -97,10 +97,10 @@ void computeSpectrumDb(const float* ring, uint32_t pos, int n, float fs, float* 
 }
 constexpr float kPi = 3.14159265358979f;
 
-// Keyboard geometry (61 keys, C2..C7)
+// Keyboard geometry (49 keys, C2..C6; the Easy knobs sit to its right)
 constexpr int kKbStartNote = 36;
-constexpr int kKbNumKeys = 61;
-constexpr int kKbNumNaturals = 36;
+constexpr int kKbNumKeys = 49;
+constexpr int kKbNumNaturals = 29;
 constexpr bool kIsBlackKey[12] = {false, true, false, true, false, false, true, false, true, false, true, false};
 
 enum MenuAction { kMenuLearn, kMenuForget, kMenuReset };
@@ -214,7 +214,34 @@ void Editor::layout() {
     pedal_ = {margin + 10.0f, 22.0f, 56.0f, 92.0f};
     pitchWheel_ = {margin + 76.0f, 22.0f, 22.0f, 92.0f};
     modWheel_ = {margin + 104.0f, 22.0f, 22.0f, 92.0f};
-    keyboard_ = {margin + 136.0f, 20.0f, contentW - 144.0f, 96.0f};
+    keyboard_ = {margin + 136.0f, 20.0f, contentW - 144.0f - 232.0f, 96.0f};
+    easyArea_ = {keyboard_.maxX() + 10.0f, 16.0f, performance_.maxX() - 8.0f - (keyboard_.maxX() + 10.0f), 104.0f};
+    easyKnobs_.clear();
+    {
+        const uint32_t ids[4] = {kParamEasyDecay, kParamEasyTone, kParamEasyDrive, kParamEasyMod};
+        const float cw = easyArea_.w / 4.0f, r = 15.0f;
+        for (int i = 0; i < 4; ++i) easyKnobs_.push_back({ids[i], {easyArea_.x + cw * i + 1.0f, easyArea_.y + 2.0f, cw - 2.0f, cellHeight(r)}, r, true});
+    }
+
+    // Effect switches in the Sound page's panel headers
+    panelToggles_.clear();
+    for (const auto& p : panels_) {
+        uint32_t id = kNumParams;
+        const char* label = nullptr;
+        switch (p.kind) {
+            case PanelKind::Amp: id = kParamTremOn; label = "TREM"; break;
+            case PanelKind::EnvFilter: id = kParamWahOn; break;
+            case PanelKind::Phaser: id = kParamPhaserOn; break;
+            case PanelKind::Chorus: id = kParamChorusOn; break;
+            case PanelKind::Echo: id = kParamEchoOn; break;
+            case PanelKind::Reverb: id = kParamReverbOn; break;
+            default: break;
+        }
+        if (id == kNumParams) continue;
+        // A narrow panel (Chorus) gets the switch's light alone, clear of its title
+        const float w = label ? 60.0f : (p.rect.w < 180.0f ? 24.0f : 44.0f);
+        panelToggles_.push_back({id, {p.rect.maxX() - 12.0f - w, p.rect.maxY() - 25.0f, w, 18.0f}, label});
+    }
 }
 
 // =============================================================================
@@ -300,6 +327,20 @@ const char* Editor::knobLabel(uint32_t id, const Stages& c) const {
         case kParamReverbDecay: return "Decay";
         case kParamReverbPreDelay: return "Pre-Delay";
         case kParamMasterTune: return "Tune";
+        case kParamWahFreq: return "Freq";
+        case kParamWahReso: return "Resonance";
+        case kParamWahRelease: return "Release";
+        case kParamPhaserDepth: case kParamChorusDepth: return "Depth";
+        case kParamPhaserCenter: return "Center";
+        case kParamPhaserFeedback: return "Feedback";
+        case kParamPhaserSpread: return "Stereo";
+        case kParamChorusRate: return "Rate";
+        case kParamChorusDelay: return "Delay";
+        case kParamChorusWidth: return "Width";
+        case kParamEasyDecay: return "Decay";
+        case kParamEasyTone: return "Tone";
+        case kParamEasyDrive: return "Drive";
+        case kParamEasyMod: return "Mod";
         default: return kParamMetadata[id].name;
     }
 }
@@ -384,9 +425,30 @@ std::string Editor::ellipsize(Canvas& c, const std::string& s, float width, cons
 // =============================================================================
 // DRAW
 // =============================================================================
-void Editor::draw(Canvas& c) {
-    lastHash_ = stateHash();
-    forceRedraw_ = false;
+void Editor::draw(Canvas& c) { draw(c, {0, 0, static_cast<float>(kEditorWidth), static_cast<float>(kEditorHeight)}); }
+
+void Editor::draw(Canvas& c, const Rect& area) {
+    // A partial repaint only brings the live regions it covers up to date; anything else that
+    // changed meanwhile is still pending and gets the full repaint it needs
+    const bool full = area.x <= 0.5f && area.y <= 0.5f && area.maxX() >= kEditorWidth - 0.5f && area.maxY() >= kEditorHeight - 0.5f;
+    Rect live[kNumLiveRegions];
+    uint64_t liveHash[kNumLiveRegions];
+    liveRegions(live, liveHash);
+    for (int i = 0; i < kNumLiveRegions; ++i) if (full || overlaps(live[i], area)) lastLive_[i] = liveHash[i];
+    if (full) {
+        lastHash_ = stateHash();
+        forceRedraw_ = false;
+    }
+    drawArea_ = area;
+    // What every parameter is after the Easy knobs, for the knobs to show
+    easyShifted_ = false;
+    if (engine_) {
+        for (uint32_t i = 0; i < kNumParams; ++i) effParams_[i] = engine_->getParamNormalized(i);
+        for (uint32_t id : {kParamEasyDecay, kParamEasyTone, kParamEasyDrive, kParamEasyMod}) {
+            easyShifted_ = easyShifted_ || std::fabs(effParams_[id] - 0.5f) > 1e-4f;
+        }
+        if (easyShifted_) applyEasyControls(effParams_);
+    }
     c.save();
     c.fillRoundRectGradient({0, 0, static_cast<float>(kEditorWidth), static_cast<float>(kEditorHeight)}, 0.0f, kBgTop, kBgBottom);
     drawHeader(c);
@@ -394,7 +456,9 @@ void Editor::draw(Canvas& c) {
     drawPageBar(c);
     if (page_ == 0) {
         drawPanels(c);
-        for (size_t i = 0; i < knobs_.size(); ++i) drawKnob(c, knobs_[i], draggedKnob_ == static_cast<int>(i));
+        for (size_t i = 0; i < knobs_.size(); ++i) {
+            if (overlaps(knobs_[i].rect, drawArea_)) drawKnob(c, knobs_[i], draggedKnob_ == static_cast<int>(i));
+        }
     } else {
         drawPage(c);
     }
@@ -522,12 +586,14 @@ void Editor::drawStageStrip(Canvas& c) {
 void Editor::drawPanels(Canvas& c) {
     const Stages s = stages();
     for (const auto& p : panels_) {
+        if (!overlaps(p.rect, drawArea_)) continue;
         c.fillRoundRectGradient(p.rect, 8.0f, kPanelTop, kPanelBg);
         c.strokeRoundRect(p.rect, 8.0f, kPanelBorder, 1.0f);
         const float ty = p.rect.maxY() - 22.0f;
         c.fillRect({p.rect.x + 12.0f, ty + 3.0f, 2.0f, 9.0f}, kAccent);
         c.drawText(panelTitle(p.kind, s), p.rect.x + 20.0f, ty + 0.5f, kPanelTitle, kTextMuted);
     }
+    for (const auto& t : panelToggles_) if (overlaps(t.rect, drawArea_)) drawToggle(c, t.rect, t.paramId, t.label);
 }
 
 void Editor::drawKnob(Canvas& c, const Knob& k, bool dragged) {
@@ -538,6 +604,7 @@ void Editor::drawKnob(Canvas& c, const Knob& k, bool dragged) {
 
     c.save();
     if (knobInactive(k.paramId, s)) c.setAlpha(0.35f);
+    else if (effectOff(k.paramId)) c.setAlpha(0.45f);
     const Rect& cell = k.rect;
     const float r = k.radius, arcR = r + kArcInset;
     const float cx = std::round(cell.midX()), cy = std::round(cell.maxY() - 20.0f - arcR);
@@ -562,6 +629,15 @@ void Editor::drawKnob(Canvas& c, const Knob& k, bool dragged) {
         c.strokeArc(cx, cy, arcR, aFrom, aCur, (armed ? kLearn : kAccent).withAlpha(0.20f), 7.0f); // soft glow
         c.strokeArc(cx, cy, arcR, aFrom, aCur, armed ? kLearn : kAccent, 3.0f);
     }
+    // Where the Easy knobs have taken this knob: a blue ring from its own setting to the value
+    // that is playing, ending in a dot (the pointer stays on the knob's own setting)
+    const float eff = k.paramId < kNumParams ? effParams_[k.paramId] : norm;
+    const bool shifted = easyShifted_ && std::fabs(eff - norm) > 0.002f;
+    if (shifted) {
+        const float aEff = a0 - eff * (a0 - a1);
+        c.strokeArc(cx, cy, arcR, aCur, aEff, kLearn, 3.0f);
+        c.fillCircle(cx + std::cos(aEff) * arcR, cy + std::sin(aEff) * arcR, 3.0f, kLearn);
+    }
 
     // Knob body: soft drop shadow, machined skirt, darker cap
     c.shadowCircle(cx, cy, r, 3.0f, -2.0f, kBlack.withAlpha(0.6f));
@@ -579,8 +655,8 @@ void Editor::drawKnob(Canvas& c, const Knob& k, bool dragged) {
     if (armed) {
         drawCentered(c, "LEARNING", valRect, kLearning, kLearn);
     } else {
-        const std::string val = valueText(k.paramId, norm, s);
-        drawCentered(c, val, valRect, kKnobValue, dragged ? kAccent : kTextMuted);
+        const std::string val = valueText(k.paramId, shifted ? eff : norm, s);
+        drawCentered(c, val, valRect, kKnobValue, dragged ? kAccent : (shifted ? kLearn : kTextMuted));
         if (midiCc >= 0) {
             char cc[16];
             std::snprintf(cc, sizeof(cc), "CC%d", midiCc);
@@ -663,6 +739,10 @@ void Editor::drawPerformance(Canvas& c) {
     }
     // Key-slip shadow across the top of the keys
     c.fillRoundRectGradient({keyboard_.x, keyboard_.maxY() - 5.0f, keyboard_.w, 5.0f}, 0.0f, kBlack.withAlpha(0.45f), kBlack.withAlpha(0.0f));
+
+    // Easy controls: each moves every setting behind one idea
+    c.fillRect({easyArea_.x - 6.0f, easyArea_.y + 4.0f, 1.0f, easyArea_.h - 8.0f}, kHairline);
+    for (size_t i = 0; i < easyKnobs_.size(); ++i) drawKnob(c, easyKnobs_[i], draggedEasyKnob_ == static_cast<int>(i));
 }
 
 // =============================================================================
@@ -1007,11 +1087,28 @@ void Editor::mouseDown(float x, float y, bool fine, double timeSec) {
     for (int i = 0; i < kNumPages; ++i) {
         if (pageTabs_[i].contains(x, y)) {
             page_ = i;
-            if (i == 7) refreshTunings();
+            if (i == kPagePlay) refreshTunings();
             return;
         }
     }
-    if (page_ == 6 && mouseDownPlay(x, y)) return;
+    if (mouseDownToggle(x, y)) return;
+    for (size_t i = 0; i < easyKnobs_.size(); ++i) {
+        if (!easyKnobs_[i].rect.contains(x, y)) continue;
+        const uint32_t pid = easyKnobs_[i].paramId;
+        if (engine_ && engine_->getLearningParamId() >= 0) { engine_->startMidiLearn(pid); return; }
+        const int key = 7000 + static_cast<int>(i);
+        if (lastClickedKnob_ == key && timeSec - lastClickTime_ < 0.35) {
+            setParam(pid, kParamMetadata[pid].defaultValue); // double-click resets
+            lastClickTime_ = -1.0;
+            return;
+        }
+        lastClickTime_ = timeSec;
+        lastClickedKnob_ = key;
+        draggedEasyKnob_ = static_cast<int>(i);
+        beginKnobDrag(pid, y, fine);
+        return;
+    }
+    if (page_ == kPagePlay && mouseDownPlay(x, y)) return;
 
     if (pedal_.contains(x, y)) {
         sendMidi(0xB0, 64, (engine_ && engine_->isSustainActive()) ? 0 : 127);
@@ -1051,6 +1148,15 @@ void Editor::beginKnobDrag(uint32_t pid, float y, bool fine) {
 }
 
 void Editor::mouseDrag(float x, float y) {
+    if (tuneDragPc_ >= 0) {
+        setCustomTuningFromY(tuneDragPc_, y);
+        return;
+    }
+    if (draggedEasyKnob_ >= 0 && draggedEasyKnob_ < static_cast<int>(easyKnobs_.size())) {
+        const float sens = fineDrag_ ? 0.0015f : 0.0065f;
+        setParam(easyKnobs_[draggedEasyKnob_].paramId, std::clamp(dragStartVal_ + (y - dragStartY_) * sens, 0.0f, 1.0f));
+        return;
+    }
     if (eqDragBand_ >= 0) {
         setEqNode(eqDragBand_, x, y);
         return;
@@ -1071,8 +1177,10 @@ void Editor::mouseDrag(float x, float y) {
 void Editor::mouseUp(float, float) {
     draggedKnob_ = -1;
     draggedModKnob_ = -1;
+    draggedEasyKnob_ = -1;
     draggedSlider_ = -1;
     eqDragBand_ = -1;
+    tuneDragPc_ = -1;
     if (heldNote_ >= 0) {
         sendMidi(0x80, static_cast<uint8_t>(heldNote_), 0);
         heldNote_ = -1;
@@ -1084,7 +1192,9 @@ void Editor::rightMouseDown(float x, float y) {
     forceRedraw_ = true;
     menuOpen_ = false;
     if (browserOpen_ || aboutOpen_ || saveOpen_) return;
-    for (const auto& k : (page_ == 0 ? knobs_ : modKnobs_)) {
+    std::vector<Knob> candidates = page_ == kPageSound ? knobs_ : modKnobs_;
+    candidates.insert(candidates.end(), easyKnobs_.begin(), easyKnobs_.end());
+    for (const auto& k : candidates) {
         if (!k.rect.contains(x, y)) continue;
         menuParam_ = k.paramId;
         menuItems_ = {{"MIDI Learn", kMenuLearn}};
@@ -1121,9 +1231,18 @@ void Editor::scroll(float x, float y, float deltaLines) {
         forceRedraw_ = true;
         return;
     }
+    if (!browserOpen_ && !aboutOpen_ && !saveOpen_) {
+        for (const auto& k : easyKnobs_) {
+            if (!k.rect.contains(x, y)) continue;
+            const float v = engine_ ? engine_->getParamNormalized(k.paramId) : 0.5f;
+            setParam(k.paramId, std::clamp(v + deltaLines * 0.01f, 0.0f, 1.0f));
+            forceRedraw_ = true;
+            return;
+        }
+    }
     if (page_ != 0 && !browserOpen_ && !aboutOpen_ && !saveOpen_) {
         forceRedraw_ = true;
-        if (page_ == 4 && engine_) { // over a node (or the plot): scroll sets that band's Q
+        if (page_ == kPageEq && engine_) { // over a node (or the plot): scroll sets that band's Q
             int band = -1;
             for (int b = 0; b < 4; ++b) if (eqNodes_[b].contains(x, y)) band = b;
             if (band < 0 && eqPlot_.contains(x, y)) band = eqSel_;
@@ -1240,33 +1359,74 @@ uint64_t Editor::stateHash() const {
             mixIn(bits);
             mixIn(static_cast<uint64_t>(engine_->getParamCc(i) + 1));
         }
-        for (int n = kKbStartNote; n < kKbStartNote + kKbNumKeys; ++n) mixIn(engine_->isNoteActive(n) ? n : 0);
-        mixIn(engine_->isSustainActive());
         mixIn(static_cast<uint64_t>(engine_->getLearningParamId() + 2));
         mixIn(static_cast<uint64_t>(engine_->getCurrentPreset() + 1));
         mixIn(engine_->canUndo() * 2 + engine_->canRedo());
         mixIn(static_cast<uint64_t>(engine_->getPresetManager().getPresetCount()));
         mixIn(static_cast<uint64_t>(page_));
         mixIn(listOpen_);
-        // Meters move in small steps; the EQ page animates every frame while notes ring
-        const ScopeSnapshot& sc = engine_->getScopeSnapshot();
-        mixIn(static_cast<uint64_t>(sc.meterL * 400.0f));
-        mixIn(static_cast<uint64_t>(sc.meterR * 400.0f));
-        mixIn(static_cast<uint64_t>(-sc.gainReductionDb * 4.0f));
-        if (page_ == 4) mixIn(sc.writePos);
-        mixIn(static_cast<uint64_t>(sc.cpuLoad * 100.0f));
-        mixIn(static_cast<uint64_t>(sc.activeVoices * 1000 + sc.polyphony));
         mixIn(engine_->getTuning().generation());
         mixIn(std::hash<std::string>()(search_));
         mixIn(favoritesOnly_ * 2 + abSlot_);
         for (const auto& p : engine_->getPresetManager().getPresets()) mixIn(p.isFavorite);
         mixIn(static_cast<uint64_t>(zoom_ * 100.0f));
-        if (page_ == 5) mixIn(sc.grPos);
     }
     return h;
 }
 
-bool Editor::wantsRedraw() { return forceRedraw_ || stateHash() != lastHash_; }
+void Editor::liveRegions(Rect rects[kNumLiveRegions], uint64_t hashes[kNumLiveRegions]) const {
+    float tabsW = 0.0f;
+    for (float w : kPageTabWidths) tabsW += w;
+    const float meterX = 16.0f + tabsW + 16.0f;
+    rects[0] = {meterX, pageBarY_, kEditorWidth - meterX, 30.0f}; // CPU, voices, output and GR meters
+    rects[1] = performance_;                                      // keys and the sustain pedal
+    rects[2] = {16.0f, 132.0f, 868.0f, 502.0f};                   // the page, where it animates
+    for (int i = 0; i < kNumLiveRegions; ++i) hashes[i] = 0;
+    if (!engine_) return;
+    auto mixer = [](uint64_t& h) { return [&h](uint64_t v) { h = (h ^ v) * 1099511628211ull; }; };
+    const ScopeSnapshot& sc = engine_->getScopeSnapshot();
+    {
+        uint64_t& h = hashes[0] = 1469598103934665603ull;
+        auto mixIn = mixer(h);
+        // Meters move in small steps
+        mixIn(static_cast<uint64_t>(sc.meterL * 400.0f));
+        mixIn(static_cast<uint64_t>(sc.meterR * 400.0f));
+        mixIn(static_cast<uint64_t>(-sc.gainReductionDb * 4.0f));
+        mixIn(static_cast<uint64_t>(sc.cpuLoad * 100.0f));
+        mixIn(static_cast<uint64_t>(sc.activeVoices * 1000 + sc.polyphony));
+    }
+    {
+        uint64_t& h = hashes[1] = 1469598103934665603ull;
+        auto mixIn = mixer(h);
+        for (int n = kKbStartNote; n < kKbStartNote + kKbNumKeys; ++n) mixIn(engine_->isNoteActive(n) ? n : 0);
+        mixIn(engine_->isSustainActive());
+    }
+    {
+        uint64_t& h = hashes[2] = 1469598103934665603ull;
+        auto mixIn = mixer(h);
+        // The EQ's analyser and the dynamics history animate every block while notes ring
+        if (page_ == kPageEq) mixIn(sc.writePos);
+        if (page_ == kPageDynamics) mixIn(sc.grPos);
+        // The Mod page shows the LFOs and the matrix moving; Play shows the CPU load
+        if (page_ == kPageMod) {
+            for (int i = 0; i < 2; ++i) mixIn(static_cast<uint64_t>(sc.lfoPhase[i] * 120.0f));
+            for (float v : sc.slotMod) mixIn(static_cast<uint64_t>(static_cast<int64_t>(v * 200.0f) + 1000));
+        }
+        if (page_ == kPagePlay) mixIn(static_cast<uint64_t>(sc.cpuLoad * 1000.0f) * 1000 + static_cast<uint64_t>(sc.activeVoices));
+    }
+}
+
+bool Editor::wantsRedraw() { return !dirtyRects().empty(); }
+
+std::vector<Rect> Editor::dirtyRects() {
+    if (forceRedraw_ || stateHash() != lastHash_) return {{0, 0, static_cast<float>(kEditorWidth), static_cast<float>(kEditorHeight)}};
+    Rect live[kNumLiveRegions];
+    uint64_t liveHash[kNumLiveRegions];
+    liveRegions(live, liveHash);
+    std::vector<Rect> out;
+    for (int i = 0; i < kNumLiveRegions; ++i) if (liveHash[i] != lastLive_[i]) out.push_back(live[i]);
+    return out;
+}
 
 // =============================================================================
 // MODULATION & EXPRESSION PANEL
@@ -1289,7 +1449,7 @@ void Editor::setSliderFromX(int index, float x) {
 bool Editor::mouseDownModPanel(float x, float y, bool fine, double timeSec) {
     const bool learning = engine_ && engine_->getLearningParamId() >= 0;
 
-    if (page_ == 4) {
+    if (page_ == kPageEq) {
         for (int b = 0; b < 4; ++b) {
             if (!eqNodes_[b].contains(x, y)) continue;
             eqSel_ = b;
@@ -1369,6 +1529,114 @@ void Editor::addStepper(Canvas& c, const Rect& r, uint32_t id, bool enabled) {
 void Editor::addSlider(Canvas& c, const Rect& r, uint32_t id, bool enabled) {
     modSliders_.push_back({id, r});
     drawSlider(c, r, id, enabled);
+}
+
+void Editor::drawToggle(Canvas& c, const Rect& r, uint32_t id, const char* label) {
+    const bool on = engine_ ? switchOn(engine_->getParamNormalized(id)) : true;
+    const bool armed = engine_ && engine_->getLearningParamId() == static_cast<int32_t>(id);
+    c.fillRoundRect(r, r.h * 0.5f, on ? kAccent.withAlpha(0.16f) : kInsetBg);
+    c.strokeRoundRect(r, r.h * 0.5f, armed ? kLearn : (on ? kAccent.withAlpha(0.7f) : kPanelBorder), 1.0f);
+    const bool compact = r.w < 30.0f;
+    const float lx = compact ? r.midX() : r.x + 9.0f, ly = r.midY();
+    if (on) c.glowCircle(lx, ly, 3.0f, 5.0f, kAccent.withAlpha(0.7f));
+    c.fillCircle(lx, ly, 3.0f, on ? kAccent : kArcTrack);
+    if (compact) return;
+    const std::string text = label ? label : (on ? "ON" : "OFF");
+    drawCentered(c, text, {r.x + 14.0f, r.y, r.w - 16.0f, r.h}, kWheelLabel, on ? kAccent : kTextMuted);
+}
+
+void Editor::addToggle(Canvas& c, const Rect& r, uint32_t id, const char* label) {
+    toggles_.push_back({id, r, label});
+    drawToggle(c, r, id, label);
+}
+
+bool Editor::mouseDownToggle(float x, float y) {
+    const std::vector<Toggle>& list = page_ == kPageSound ? panelToggles_ : toggles_;
+    for (const auto& t : list) {
+        if (!t.rect.contains(x, y)) continue;
+        if (engine_ && engine_->getLearningParamId() >= 0) { engine_->startMidiLearn(t.paramId); return true; }
+        const bool on = engine_ ? switchOn(engine_->getParamNormalized(t.paramId)) : true;
+        if (engine_) engine_->pushUndoState(kParamMetadata[t.paramId].name);
+        setParam(t.paramId, on ? 0.0f : 1.0f);
+        return true;
+    }
+    return false;
+}
+
+uint32_t Editor::effectSwitchFor(uint32_t id) {
+    switch (id) {
+        case kParamWahAmount: case kParamWahSens: case kParamWahReso: case kParamWahMode: case kParamWahDir:
+        case kParamWahFreq: case kParamWahRelease:
+            return kParamWahOn;
+        case kParamPhaserMix: case kParamPhaserRate: case kParamPhaserSync: case kParamPhaserDepth: case kParamPhaserFeedback:
+        case kParamPhaserStages: case kParamPhaserCenter: case kParamPhaserSpread:
+            return kParamPhaserOn;
+        case kParamTremoloDepth: case kParamTremoloRate: case kParamTremSync:
+            return kParamTremOn;
+        case kParamChorusMix: case kParamChorusMode: case kParamChorusRate: case kParamChorusDepth: case kParamChorusDelay:
+        case kParamChorusWidth:
+            return kParamChorusOn;
+        case kParamDelayMix: case kParamDelayTime: case kParamDelayFeedback: case kParamEchoSync:
+            return kParamEchoOn;
+        case kParamReverbMix: case kParamReverbDecay: case kParamReverbPreDelay: case kParamReverbType:
+            return kParamReverbOn;
+        case kParamEqB1Freq: case kParamEqB1Gain: case kParamEqB1Q: case kParamEqB1Shelf: case kParamEqB2Freq: case kParamEqB2Gain:
+        case kParamEqB2Q: case kParamEqFreq: case kParamEqGain: case kParamEqB3Q: case kParamEqB4Freq: case kParamEqB4Gain:
+        case kParamEqB4Q: case kParamEqB4Shelf:
+            return kParamEqOn;
+        case kParamCompAmount: case kParamCompThresh: case kParamCompRatio: case kParamCompAttack: case kParamCompRelease:
+        case kParamCompKnee: case kParamCompMakeup: case kParamCompHpf: case kParamCompDetect: case kParamCompAuto:
+            return kParamCompOn;
+        default: return kNumParams;
+    }
+}
+
+bool Editor::effectOff(uint32_t id) const {
+    const uint32_t sw = effectSwitchFor(id);
+    return sw < kNumParams && engine_ && !switchOn(engine_->getParamNormalized(sw));
+}
+
+// ---- FX page: envelope filter, phaser and chorus in full -----------------------------------------
+void Editor::drawLabFx(Canvas& c, const Rect& area) {
+    struct Module {
+        const char* title;
+        uint32_t onId;
+        std::vector<uint32_t> knobs;
+        std::vector<std::pair<const char*, uint32_t>> steppers;
+        const char* help;
+    };
+    const Module modules[3] = {
+        {"ENVELOPE FILTER", kParamWahOn, {kParamWahAmount, kParamWahSens, kParamWahFreq, kParamWahReso, kParamWahRelease},
+         {{"MODE", kParamWahMode}, {"DIRECTION", kParamWahDir}},
+         "Play harder to sweep the filter. Freq is where it rests, Release how fast it falls back."},
+        {"PHASER", kParamPhaserOn, {kParamPhaserMix, kParamPhaserRate, kParamPhaserDepth, kParamPhaserCenter, kParamPhaserFeedback, kParamPhaserSpread},
+         {{"STAGES", kParamPhaserStages}, {"TEMPO SYNC", kParamPhaserSync}},
+         "More stages, more notches. Feedback below zero hollows, above zero sings."},
+        {"CHORUS", kParamChorusOn, {kParamChorusMix, kParamChorusRate, kParamChorusDepth, kParamChorusDelay, kParamChorusWidth},
+         {{"MODE", kParamChorusMode}},
+         "Short delays flange, long ones double. Width spreads the wet signal."},
+    };
+    const float gap = 8.0f, ch = (area.h - 2.0f * gap) / 3.0f;
+    const float r = 19.0f, cellH = 32.0f + 2.0f * (r + kArcInset);
+    for (int m = 0; m < 3; ++m) {
+        const Module& mod = modules[m];
+        const Rect card{area.x, area.maxY() - (m + 1) * ch - m * gap, area.w, ch};
+        drawCard(c, card, mod.title);
+        addToggle(c, {card.maxX() - 12.0f - 44.0f, card.maxY() - 25.0f, 44.0f, 18.0f}, mod.onId);
+        const bool on = engine_ ? switchOn(engine_->getParamNormalized(mod.onId)) : true;
+        const float side = 196.0f, kw = card.w - side - 16.0f;
+        const float cw = std::min(108.0f, kw / static_cast<float>(mod.knobs.size()));
+        for (size_t i = 0; i < mod.knobs.size(); ++i) {
+            modKnobs_.push_back({mod.knobs[i], {card.x + 12.0f + cw * i, card.y + 22.0f, cw, cellH}, r, mod.knobs[i] == kParamPhaserFeedback});
+        }
+        const float sx = card.maxX() - side;
+        for (size_t k = 0; k < mod.steppers.size(); ++k) {
+            const float cy = card.maxY() - 50.0f - 52.0f * k;
+            c.drawText(mod.steppers[k].first, sx, cy, kPanelTitle, kTextDim);
+            addStepper(c, {sx, cy - 30.0f, side - 16.0f, 26.0f}, mod.steppers[k].second, on);
+        }
+        c.drawText(ellipsize(c, mod.help, kw, kLinkSub), card.x + 20.0f, card.y + 9.0f, kLinkSub, kTextDim);
+    }
 }
 
 void Editor::drawStepper(Canvas& c, const Rect& r, uint32_t id, bool enabled) {
@@ -1471,17 +1739,17 @@ void Editor::drawMeter(Canvas& c, const Rect& r, float level, bool reverse) {
 }
 
 // =============================================================================
-// PAGES: Sound (the instrument panels), Modulation, Macros, Space, EQ, Dynamics, Play.
+// PAGES: Sound (the instrument panels), Modulation, Macros, FX, Space, EQ, Dynamics, Play.
 // Every page fills the same 868 x 502 area under the page bar, so the header, signal
 // chain, keyboard and output meters stay put and the plugin reads as one instrument.
 // =============================================================================
 void Editor::drawPageBar(Canvas& c) {
-    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "SPACE", "EQ", "DYNAMICS", "PLAY"};
-    static const float widths[kNumPages] = {72.0f, 56.0f, 76.0f, 66.0f, 46.0f, 88.0f, 56.0f};
+    static const char* names[kNumPages] = {"SOUND", "MOD", "MACROS", "FX", "SPACE", "EQ", "DYNAMICS", "PLAY"};
+    const float* widths = kPageTabWidths;
     float x = 16.0f;
     const float y = pageBarY_, h = 30.0f;
     float total = 0.0f;
-    for (float w : widths) total += w;
+    for (float w : kPageTabWidths) total += w;
     const Rect all{x, y, total, h};
     c.fillRoundRect(all, 8.0f, kPanelBg);
     c.strokeRoundRect(all, 8.0f, kPanelBorder, 1.0f);
@@ -1514,17 +1782,19 @@ void Editor::drawPageBar(Canvas& c) {
 }
 
 void Editor::drawPage(Canvas& c) {
+    toggles_.clear();
     modSteppers_.clear();
     modSliders_.clear();
     modKnobs_.clear();
     const Rect area{16.0f, 132.0f, 868.0f, 502.0f};
     switch (page_) {
-        case 1: drawLabMod(c, area); break;
-        case 2: drawLabMacros(c, area); break;
-        case 3: drawLabSpace(c, area); break;
-        case 4: drawLabEq(c, area); break;
-        case 5: drawLabDynamics(c, area); break;
-        case 6: drawLabPlay(c, area); break;
+        case kPageMod: drawLabMod(c, area); break;
+        case kPageMacros: drawLabMacros(c, area); break;
+        case kPageFx: drawLabFx(c, area); break;
+        case kPageSpace: drawLabSpace(c, area); break;
+        case kPageEq: drawLabEq(c, area); break;
+        case kPageDynamics: drawLabDynamics(c, area); break;
+        case kPagePlay: drawLabPlay(c, area); break;
         default: break;
     }
     for (size_t i = 0; i < modKnobs_.size(); ++i) drawKnob(c, modKnobs_[i], draggedModKnob_ == static_cast<int>(i));
@@ -1540,11 +1810,12 @@ void Editor::drawLabMod(Canvas& c, const Rect& area) {
     for (int i = 0; i < 2; ++i) {
         const Rect card{area.x + i * 438.0f, topY - 106.0f, 430.0f, 106.0f};
         drawCard(c, card, i == 0 ? "LFO 1" : "LFO 2");
-        modKnobs_.push_back({lfoParams[i][0], {card.x + 14.0f, card.y + 4.0f, 90.0f, 73.0f}, 15.0f, false});
-        caption("SHAPE", card.x + 134.0f, card.y + 58.0f);
-        addStepper(c, {card.x + 134.0f, card.y + 28.0f, 134.0f, 26.0f}, lfoParams[i][1]);
-        caption("TEMPO SYNC", card.x + 282.0f, card.y + 58.0f);
-        addStepper(c, {card.x + 282.0f, card.y + 28.0f, 134.0f, 26.0f}, lfoParams[i][2]);
+        modKnobs_.push_back({lfoParams[i][0], {card.x + 10.0f, card.y + 4.0f, 84.0f, 73.0f}, 15.0f, false});
+        drawLfoView(c, {card.x + 100.0f, card.y + 10.0f, 156.0f, card.h - 40.0f}, i);
+        caption("SHAPE", card.x + 266.0f, card.y + 51.0f);
+        addStepper(c, {card.x + 314.0f, card.y + 44.0f, 104.0f, 24.0f}, lfoParams[i][1]);
+        caption("SYNC", card.x + 266.0f, card.y + 19.0f);
+        addStepper(c, {card.x + 314.0f, card.y + 12.0f, 104.0f, 24.0f}, lfoParams[i][2]);
     }
     const float colTop = topY - 106.0f - 8.0f;
     const float colH = colTop - area.y;
@@ -1569,6 +1840,15 @@ void Editor::drawLabMod(Canvas& c, const Rect& area) {
         c.strokeLine(ax + 16.0f, ay, ax + 11.0f, ay - 4.0f, on ? kAccent : kTextDim, 1.5f);
         addStepper(c, {matrix.x + 204.0f, rowY, 180.0f, 26.0f}, base + 1, on);
         addSlider(c, {matrix.x + 396.0f, rowY + 2.0f, 150.0f, 22.0f}, base + 2, on);
+        // Live: what the slot is adding to its target right now, under the amount slider's track
+        if (on && engine_) {
+            const float live = std::clamp(engine_->getScopeSnapshot().slotMod[i], -1.0f, 1.0f);
+            const Rect track{matrix.x + 396.0f, rowY - 3.0f, 150.0f - 56.0f, 3.0f};
+            c.fillRoundRect(track, 1.5f, kArcTrack.withAlpha(0.6f));
+            const float cx = track.midX(), tx = cx + live * track.w * 0.5f;
+            if (std::fabs(tx - cx) > 0.5f) c.fillRoundRect({std::min(cx, tx), track.y, std::fabs(tx - cx), track.h}, 1.5f, kLearn);
+            c.fillCircle(tx, track.midY(), 2.5f, kLearn);
+        }
     }
     {
         float y = matrix.y + 40.0f;
@@ -1600,6 +1880,49 @@ void Editor::drawLabMod(Canvas& c, const Rect& area) {
     addStepper(c, row(sync, 1, "Phaser"), kParamPhaserSync);
     addStepper(c, row(sync, 2, "Echo"), kParamEchoSync);
     addStepper(c, row(sync, 3, "Oversampling"), kParamQuality);
+}
+
+// One cycle of an LFO's shape with a dot running along it at the LFO's phase (its speed is the
+// rate). Above about 30 Hz the dot would only flicker, so the view says "audio rate" instead.
+void Editor::drawLfoView(Canvas& c, const Rect& r, int lfo) {
+    c.fillRoundRect(r, 5.0f, kInsetBg);
+    c.strokeRoundRect(r, 5.0f, kPanelBorder, 1.0f);
+    c.fillRect({r.x + 3.0f, r.midY() - 0.5f, r.w - 6.0f, 1.0f}, kHairline);
+    if (!engine_) return;
+    const uint32_t shapeId = lfo == 0 ? kParamLfo1Shape : kParamLfo2Shape;
+    const uint32_t rateId = lfo == 0 ? kParamLfo1Rate : kParamLfo2Rate, syncId = lfo == 0 ? kParamLfo1Sync : kParamLfo2Sync;
+    const int shape = stepIndex(engine_->getParamNormalized(shapeId), 4);
+    auto valueAt = [shape](float ph) {
+        switch (shape) {
+            case 0: return std::sin(6.2831853f * ph);
+            case 1: return 1.0f - 4.0f * std::fabs(ph - 0.5f);
+            case 2: return 2.0f * ph - 1.0f;
+            case 3: return ph < 0.5f ? 1.0f : -1.0f;
+            default: { // sample & hold: a fixed staircase stands in for the random steps
+                static const float steps[8] = {0.3f, -0.7f, 0.9f, -0.2f, 0.55f, -0.95f, 0.1f, -0.45f};
+                return steps[std::min(7, static_cast<int>(ph * 8.0f))];
+            }
+        }
+    };
+    const Rect plot = r.inset(8.0f, 8.0f);
+    auto px = [&](float ph) { return plot.x + ph * plot.w; };
+    auto py = [&](float v) { return plot.midY() + v * plot.h * 0.5f; };
+    constexpr int kN = 64;
+    for (int k = 1; k <= kN; ++k) {
+        const float p0 = (k - 1) / static_cast<float>(kN), p1 = k / static_cast<float>(kN);
+        c.strokeLine(px(p0), py(valueAt(p0 + 1e-4f)), px(p1), py(valueAt(p1 - 1e-4f)), kAccent.withAlpha(0.55f), 1.5f);
+    }
+    const ScopeSnapshot& sc = engine_->getScopeSnapshot();
+    const float hz = syncedHz(lfoRateHz(engine_->getParamNormalized(rateId)), engine_->getParamNormalized(syncId), 120.0f);
+    if (stepIndex(engine_->getParamNormalized(syncId), 7) == 0 && hz > 30.0f) {
+        drawCentered(c, "audio rate", {r.x, r.maxY() - 16.0f, r.w, 12.0f}, kLinkSub, kTextMuted);
+        return;
+    }
+    const float ph = sc.lfoPhase[lfo];
+    const float x = px(ph), y = py(shape == 4 ? sc.lfoValue[lfo] : valueAt(ph));
+    c.fillRect({x - 0.5f, plot.y, 1.0f, plot.h}, kLearn.withAlpha(0.35f));
+    c.glowCircle(x, y, 3.5f, 6.0f, kLearn.withAlpha(0.7f));
+    c.fillCircle(x, y, 3.5f, kLearn);
 }
 
 void Editor::drawLabMacros(Canvas& c, const Rect& area) {
@@ -1720,6 +2043,7 @@ void Editor::setEqNode(int band, float x, float y) {
 void Editor::drawLabEq(Canvas& c, const Rect& area) {
     const Rect card{area.x, area.maxY() - 304.0f, area.w, 304.0f};
     drawCard(c, card, "MASTERING EQ");
+    addToggle(c, {card.maxX() - 12.0f - 44.0f, card.maxY() - 25.0f, 44.0f, 18.0f}, kParamEqOn);
     eqPlot_ = {card.x + 12.0f, card.y + 12.0f, card.w - 24.0f, card.h - 42.0f};
     drawCurveGrid(c, eqPlot_, -15.0f, 15.0f, 5.0f);
 
@@ -1879,6 +2203,7 @@ void Editor::drawLabDynamics(Canvas& c, const Rect& area) {
     const float rowH = 150.0f;
     const Rect comp{area.x, area.maxY() - topH - 8.0f - rowH, area.w, rowH};
     drawCard(c, comp, "COMPRESSOR");
+    addToggle(c, {comp.maxX() - 12.0f - 44.0f, comp.maxY() - 25.0f, 44.0f, 18.0f}, kParamCompOn);
     const uint32_t ids[8] = {kParamCompThresh, kParamCompRatio, kParamCompAttack, kParamCompRelease, kParamCompKnee, kParamCompMakeup, kParamCompHpf, kParamCompAmount};
     const float cw = 84.0f;
     for (int i = 0; i < 8; ++i) modKnobs_.push_back({ids[i], {comp.x + 10.0f + cw * i, comp.y + 8.0f, cw - 6.0f, 89.0f}, 23.0f, false});
@@ -2050,6 +2375,11 @@ void Editor::drawLabPlay(Canvas& c, const Rect& area) {
     }
     static const char* noteNames[12] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
     const float bw = (plot.w - 50.0f) / 12.0f;
+    tunePlot_ = plot;
+    tuneBarX0_ = plot.x + 44.0f;
+    tuneBarW_ = bw;
+    tuneMid_ = mid;
+    tuneSpan_ = span;
     for (int k = 0; k < 12; ++k) {
         const float bx = plot.x + 44.0f + bw * k;
         float cents = 0.0f;
@@ -2060,12 +2390,15 @@ void Editor::drawLabPlay(Canvas& c, const Rect& area) {
             continue;
         }
         const float h = span * std::clamp(cents, -60.0f, 60.0f) / 50.0f;
-        c.fillRoundRect({bx + bw * 0.22f, std::min(mid, mid + h), bw * 0.56f, std::max(1.5f, std::fabs(h))}, 2.0f, kAccent);
+        const bool dragging = tuneDragPc_ == k;
+        c.fillRoundRect({bx + bw * 0.22f, std::min(mid, mid + h), bw * 0.56f, std::max(1.5f, std::fabs(h))}, 2.0f, dragging ? kLearn : kAccent);
+        // Handle: drag it up or down to retune that note in every octave
+        c.fillRoundRect({bx + bw * 0.12f, mid + h - 2.5f, bw * 0.76f, 5.0f}, 2.5f, dragging ? kLearn : kTextPrimary.withAlpha(0.85f));
         char b[12];
         std::snprintf(b, sizeof(b), "%+.0f", cents);
         drawCentered(c, b, {bx, plot.maxY() - 16.0f, bw, 12.0f}, kLinkSub, kTextMuted);
     }
-    caption("CENTS FROM EQUAL TEMPERAMENT, C4 - B4", plot.x + 4.0f, plot.maxY() + 6.0f);
+    caption("CENTS FROM EQUAL TEMP.  DRAG A BAR FOR A CUSTOM SCALE", plot.x + 4.0f, plot.maxY() + 6.0f);
 
     // Concert pitch and transposition
     modKnobs_.push_back({kParamMasterTune, {tune.x + 16.0f, tune.y + 12.0f, 120.0f, 89.0f}, 22.0f, false});
@@ -2082,8 +2415,8 @@ void Editor::drawLabPlay(Canvas& c, const Rect& area) {
     const uint32_t ids[3] = {kParamCondition, kParamSympathetic, kParamStereoSpread};
     for (int i = 0; i < 3; ++i) modKnobs_.push_back({ids[i], {inst.x + kw * i + 8.0f, inst.y + 66.0f, kw - 16.0f, 89.0f}, 23.0f, false});
     float ty = inst.y + 46.0f;
-    for (const auto& line : wrap(c, "Condition: per-key tuning, voicing and wear. Sympathetic: undamped tines ring along with the pedal down. "
-                                    "Key Spread: low keys left, high keys right.", rw - 36.0f, kLinkSub)) {
+    for (const auto& line : wrap(c, "Condition: per-key tuning, voicing and wear (strong above 60 %). Sympathetic: the other tines ring along, "
+                                    "fully with the pedal down and lightly without it high on the knob. Key Spread: low keys left, high keys right.", rw - 36.0f, kLinkSub)) {
         c.drawText(line, inst.x + 18.0f, ty, kLinkSub, kTextDim);
         ty -= c.lineHeight(kLinkSub) + 1.0f;
     }
@@ -2148,8 +2481,30 @@ void Editor::switchAb(int slot) {
     forceRedraw_ = true;
 }
 
+void Editor::setCustomTuningFromY(int pitchClass, float y) {
+    if (!engine_ || pitchClass < 0 || pitchClass > 11) return;
+    // Start from whatever the current tuning does in C4..B4, then move the one note
+    float pc[12];
+    for (int k = 0; k < 12; ++k) {
+        float cents = 0.0f;
+        pc[k] = engine_->getTuning().centsFor(60 + k, cents) ? std::clamp(cents, -50.0f, 50.0f) : 0.0f;
+    }
+    pc[pitchClass] = std::round(std::clamp((y - tuneMid_) / std::max(1.0f, tuneSpan_) * 50.0f, -50.0f, 50.0f));
+    engine_->getTuning().setPitchClassOffsets(pc, "Custom");
+    forceRedraw_ = true;
+}
+
 bool Editor::mouseDownPlay(float x, float y) {
     if (!engine_) return false;
+    if (tunePlot_.contains(x, y) && x >= tuneBarX0_) {
+        const int k = static_cast<int>((x - tuneBarX0_) / tuneBarW_);
+        if (k >= 0 && k < 12) {
+            tuneDragPc_ = k;
+            tuningError_.clear();
+            setCustomTuningFromY(k, y);
+            return true;
+        }
+    }
     auto currentIndex = [&]() {
         const std::string name = engine_->getTuning().name();
         for (size_t i = 0; i < tunings_.size(); ++i) {

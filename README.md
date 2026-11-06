@@ -67,7 +67,7 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 </tr>
 </table>
 
-## One window, seven pages
+## One window, eight pages
 
 <table>
 <tr>

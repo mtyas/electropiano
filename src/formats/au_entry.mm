@@ -58,8 +58,10 @@ static const AudioUnitPropertyID kPhsCustomProperty_EnginePtr = 65500;
 namespace {
 
 static const UInt32 kAuType         = 'aumu';
-static const UInt32 kAuSubType      = 'PhsE';
-static const UInt32 kAuManufacturer = 'PyPH';
+// Must match the AudioComponents entry in the bundle's Info.plist (CMakeLists.txt). A manufacturer
+// code needs at least one capital: all-lowercase codes are reserved for Apple.
+static const UInt32 kAuSubType      = 'ePno';
+static const UInt32 kAuManufacturer = 'Mtya';
 static const UInt32 kAuVersion      = (PHS_VERSION_MAJOR << 16) | (PHS_VERSION_MINOR << 8);
 
 struct PropListener {
@@ -82,7 +84,25 @@ struct PhsAudioUnit {
     Float64 sampleRate = 48000.0;
     UInt32 channels = 2;
     UInt32 maxFramesPerSlice = 4096;
-    AUPreset currentPreset{0, CFSTR("1973 Suitcase Rhodes Mk I")};
+    // The host's name for the current state (a user preset, or one restored with ClassInfo);
+    // null means the engine's own preset name
+    CFStringRef presetName = nullptr;
+    CFStringRef lastCurrentPresetName = nullptr; // kept alive for CurrentPreset, which the caller does not own
+    ~PhsAudioUnit() {
+        if (presetName) CFRelease(presetName);
+        if (lastCurrentPresetName) CFRelease(lastCurrentPresetName);
+    }
+    void setPresetName(CFStringRef name) {
+        if (name) CFRetain(name);
+        if (presetName) CFRelease(presetName);
+        presetName = name;
+    }
+    // +1: the current state's name
+    CFStringRef copyPresetName() {
+        if (presetName) return static_cast<CFStringRef>(CFRetain(presetName));
+        const auto *preset = engine.getPresetManager().getPreset(engine.getCurrentPreset());
+        return CFStringCreateWithCString(kCFAllocatorDefault, preset ? preset->name.c_str() : "Custom", kCFStringEncodingUTF8);
+    }
     UInt32 nextNoteInstanceId = 100;
 
     std::vector<float> scratchL;
@@ -389,16 +409,13 @@ static OSStatus auGetProperty(void *selfPtr,
         case kAudioUnitProperty_PresentPreset:
         case kAudioUnitProperty_CurrentPreset: {
             if (inScope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidProperty;
-            const int idx = self->engine.getCurrentPreset();
-            self->currentPreset.presetNumber = idx;
-            const auto *preset = self->engine.getPresetManager().getPreset(idx);
-            self->currentPreset.presetName = CFStringCreateWithCString(kCFAllocatorDefault,
-                                                                       preset ? preset->name.c_str() : "Custom",
-                                                                       kCFStringEncodingUTF8);
-            if (inID == kAudioUnitProperty_PresentPreset && self->currentPreset.presetName) {
-                CFRetain(self->currentPreset.presetName);
+            // PresentPreset hands the caller a name it releases; CurrentPreset's stays ours
+            CFStringRef name = self->copyPresetName();
+            if (inID == kAudioUnitProperty_CurrentPreset) {
+                if (self->lastCurrentPresetName) CFRelease(self->lastCurrentPresetName);
+                self->lastCurrentPresetName = name;
             }
-            *static_cast<AUPreset *>(outData) = self->currentPreset;
+            *static_cast<AUPreset *>(outData) = AUPreset{self->presetName ? -1 : self->engine.getCurrentPreset(), name};
             *ioDataSize = sizeof(AUPreset);
             return noErr;
         }
@@ -425,7 +442,9 @@ static OSStatus auGetProperty(void *selfPtr,
             CFDictionarySetValue(dict, CFSTR("type"), nType);
             CFDictionarySetValue(dict, CFSTR("subtype"), nSub);
             CFDictionarySetValue(dict, CFSTR("manufacturer"), nManu);
-            CFDictionarySetValue(dict, CFSTR("name"), CFSTR("electropiano"));
+            CFStringRef name = self->copyPresetName();
+            CFDictionarySetValue(dict, CFSTR("name"), name);
+            CFRelease(name);
             CFDictionarySetValue(dict, CFSTR("data"), stateData);
 
             CFRelease(nVer);
@@ -508,7 +527,7 @@ static OSStatus auSetProperty(void *selfPtr,
         case kAudioUnitProperty_MaximumFramesPerSlice: {
             if (inScope != kAudioUnitScope_Global) return kAudioUnitErr_InvalidProperty;
             if (inDataSize < sizeof(UInt32)) return kAudio_ParamError;
-            self->maxFramesPerSlice = std::max<UInt32>(64, *static_cast<const UInt32 *>(inData));
+            self->maxFramesPerSlice = std::max<UInt32>(1, *static_cast<const UInt32 *>(inData));
             self->scratchL.resize(self->maxFramesPerSlice, 0.0f);
             self->scratchR.resize(self->maxFramesPerSlice, 0.0f);
             self->notifyPropertyChanged(kAudioUnitProperty_MaximumFramesPerSlice, inScope, inElement);
@@ -522,6 +541,9 @@ static OSStatus auSetProperty(void *selfPtr,
             const auto &pr = *static_cast<const AUPreset *>(inData);
             if (pr.presetNumber >= 0 && pr.presetNumber < self->engine.getPresetManager().getPresetCount()) {
                 self->engine.loadPreset(pr.presetNumber);
+                self->setPresetName(nullptr);
+            } else {
+                self->setPresetName(pr.presetName); // a host (user) preset: keep its name
             }
             self->notifyPropertyChanged(kAudioUnitProperty_PresentPreset, inScope, inElement);
             self->notifyPropertyChanged(kAudioUnitProperty_ParameterList, inScope, inElement);
@@ -538,6 +560,9 @@ static OSStatus auSetProperty(void *selfPtr,
             if (dataRef && CFGetTypeID(dataRef) == CFDataGetTypeID()) {
                 self->engine.setState(CFDataGetBytePtr(dataRef), static_cast<size_t>(CFDataGetLength(dataRef)));
             }
+            CFStringRef name = static_cast<CFStringRef>(CFDictionaryGetValue(dict, CFSTR("name")));
+            self->setPresetName(name && CFGetTypeID(name) == CFStringGetTypeID() ? name : nullptr);
+            self->notifyPropertyChanged(kAudioUnitProperty_PresentPreset, kAudioUnitScope_Global, 0);
             return noErr;
         }
 

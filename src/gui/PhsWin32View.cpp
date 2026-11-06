@@ -45,11 +45,20 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_CREATE: {
             auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-            SetTimer(hwnd, 1, 33, nullptr); // ~30 fps; repaints only when something changed
+            SetTimer(hwnd, 1, 16, nullptr); // ~60 fps; repaints only what changed
             return 0;
         }
         case WM_TIMER:
-            if (self && self->editor->wantsRedraw()) InvalidateRect(hwnd, nullptr, FALSE);
+            if (self) {
+                // Meters, keys and analysers repaint their own regions; anything else, the window
+                for (const phs::gui::Rect& r : self->editor->dirtyRects()) {
+                    if (r.w >= phs::kEditorWidth && r.h >= phs::kEditorHeight) { InvalidateRect(hwnd, nullptr, FALSE); break; }
+                    const float z = self->zoom;
+                    RECT rc{static_cast<LONG>(r.x * z) - 1, static_cast<LONG>((phs::kEditorHeight - r.maxY()) * z) - 1,
+                            static_cast<LONG>(r.maxX() * z) + 2, static_cast<LONG>((phs::kEditorHeight - r.y) * z) + 2};
+                    InvalidateRect(hwnd, &rc, FALSE);
+                }
+            }
             return 0;
         case WM_ERASEBKGND:
             return 1;
@@ -67,9 +76,24 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 RECT rc;
                 GetClientRect(hwnd, &rc);
                 const int w = std::max(1, static_cast<int>(rc.right - rc.left)), h = std::max(1, static_cast<int>(rc.bottom - rc.top));
-                if (c.width() != w || c.height() != h) c.resize(w, h);
+                const bool resized = c.width() != w || c.height() != h;
+                if (resized) c.resize(w, h);
                 phs::gui::ScaledCanvas scaled(c, self->zoom);
-                self->editor->draw(scaled);
+                // The canvas keeps the last frame, so a partial update repaints only its area
+                // (GDI clips the blit below to the same area)
+                const RECT& u = ps.rcPaint;
+                const bool full = resized || (u.left <= 0 && u.top <= 0 && u.right >= w && u.bottom >= h);
+                if (full) {
+                    self->editor->draw(scaled);
+                } else {
+                    const float z = self->zoom;
+                    const phs::gui::Rect area{u.left / z - 1.0f, phs::kEditorHeight - u.bottom / z - 1.0f,
+                                              (u.right - u.left) / z + 2.0f, (u.bottom - u.top) / z + 2.0f};
+                    c.save();
+                    scaled.clip(area);
+                    self->editor->draw(scaled, area);
+                    c.restore();
+                }
                 BITMAPINFO bmi{};
                 bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
                 bmi.bmiHeader.biWidth = c.width();

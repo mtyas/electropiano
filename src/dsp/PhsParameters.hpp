@@ -103,6 +103,31 @@ enum ParamID : uint32_t {
     kParamChorusMode,          // 0 Dual (two BBD taps), 1 Tri-chorus (three taps, 120 degrees apart)
     kParamGapFmExact,          // Gap FM ratio: 0 free, 1 snapped to exact ratios (1:4 .. 8:1)
 
+    // --- Effect switches (the knobs keep their settings while an effect is off) ---
+    kParamWahOn, kParamPhaserOn, kParamTremOn, kParamChorusOn, kParamEchoOn, kParamReverbOn, kParamEqOn, kParamCompOn,
+
+    // --- Envelope filter, phaser and chorus in depth ---
+    kParamWahReso,             // Filter resonance (Q 0.7 .. 14)
+    kParamWahMode,             // 0 Classic (low-pass + band-pass), 1 Low-pass, 2 Band-pass, 3 High-pass
+    kParamWahDir,              // 0 sweeps up with the playing, 1 sweeps down
+    kParamWahFreq,             // Resting frequency the sweep starts from
+    kParamWahRelease,          // How fast the filter falls back after a note
+    kParamPhaserDepth,         // Sweep width (octaves)
+    kParamPhaserFeedback,      // Resonance: negative and positive feedback
+    kParamPhaserStages,        // 2, 4, 6, 8 or 12 all-pass stages
+    kParamPhaserCenter,        // Centre of the sweep
+    kParamPhaserSpread,        // Stereo: phase offset between the left and right sweeps
+    kParamChorusRate,          // Chorus LFO speed
+    kParamChorusDepth,         // Chorus sweep depth
+    kParamChorusDelay,         // Chorus base delay (short = flanger-like, long = doubling)
+    kParamChorusWidth,         // Stereo width of the wet signal
+
+    // --- Easy controls: one knob each that moves every related setting ---
+    kParamEasyDecay,           // Shorter <-> longer ring
+    kParamEasyTone,            // Darker / bassier <-> brighter
+    kParamEasyDrive,           // Cleaner <-> dirtier
+    kParamEasyMod,             // Scales the modulation matrix and the modulation effects (0 = none, centre = as set, max = double)
+
     kNumParams
 };
 
@@ -237,6 +262,32 @@ static constexpr std::array<ParamInfo, kNumParams> kParamMetadata = {{
     {kParamReverbPreDelay,   "Pre-Delay",      "PreDly",   "ms",  "Effects",    0.10f, 0},
     {kParamChorusMode,       "Chorus Mode",    "ChMode",   "",    "Effects",    1.00f, 1},
     {kParamGapFmExact,       "Gap FM Exact",   "FMExact",  "",    "Macros",     0.00f, 1},
+    {kParamWahOn,            "Env Filter On",  "WahOn",    "",    "Effects",    1.00f, 1},
+    {kParamPhaserOn,         "Phaser On",      "PhsOn",    "",    "Effects",    1.00f, 1},
+    {kParamTremOn,           "Tremolo On",     "TremOn",   "",    "Amp",        1.00f, 1},
+    {kParamChorusOn,         "Chorus On",      "ChOn",     "",    "Effects",    1.00f, 1},
+    {kParamEchoOn,           "Echo On",        "EchoOn",   "",    "Effects",    1.00f, 1},
+    {kParamReverbOn,         "Reverb On",      "RevOn",    "",    "Effects",    1.00f, 1},
+    {kParamEqOn,             "EQ On",          "EqOn",     "",    "Mastering EQ", 1.00f, 1},
+    {kParamCompOn,           "Comp On",        "CompOn",   "",    "Dynamics",   1.00f, 1},
+    {kParamWahReso,          "Env Resonance",  "WahRes",   "",    "Effects",    0.582f, 0},
+    {kParamWahMode,          "Env Mode",       "WahMode",  "",    "Effects",    0.00f, 3},
+    {kParamWahDir,           "Env Direction",  "WahDir",   "",    "Effects",    0.00f, 1},
+    {kParamWahFreq,          "Env Frequency",  "WahFreq",  "Hz",  "Effects",    0.375f, 0},
+    {kParamWahRelease,       "Env Release",    "WahRel",   "ms",  "Effects",    0.515f, 0},
+    {kParamPhaserDepth,      "Phaser Depth",   "PhsDep",   "oct", "Effects",    0.521f, 0},
+    {kParamPhaserFeedback,   "Phaser Feedback","PhsFb",    "%",   "Effects",    0.721f, 0},
+    {kParamPhaserStages,     "Phaser Stages",  "PhsStg",   "",    "Effects",    0.25f, 4},
+    {kParamPhaserCenter,     "Phaser Center",  "PhsCtr",   "Hz",  "Effects",    0.471f, 0},
+    {kParamPhaserSpread,     "Phaser Stereo",  "PhsSpr",   "deg", "Effects",    0.36f, 0},
+    {kParamChorusRate,       "Chorus Rate",    "ChRate",   "Hz",  "Effects",    0.5056f, 0},
+    {kParamChorusDepth,      "Chorus Depth",   "ChDepth",  "%",   "Effects",    0.50f, 0},
+    {kParamChorusDelay,      "Chorus Delay",   "ChDelay",  "ms",  "Effects",    0.3056f, 0},
+    {kParamChorusWidth,      "Chorus Width",   "ChWidth",  "%",   "Effects",    0.50f, 0},
+    {kParamEasyDecay,        "Easy Decay",     "EzDecay",  "",    "Easy",       0.50f, 0},
+    {kParamEasyTone,         "Easy Tone",      "EzTone",   "",    "Easy",       0.50f, 0},
+    {kParamEasyDrive,        "Easy Drive",     "EzDrive",  "",    "Easy",       0.50f, 0},
+    {kParamEasyMod,          "Easy Mod",       "EzMod",    "",    "Easy",       0.50f, 0},
 }};
 
 // -----------------------------------------------------------------------------
@@ -257,7 +308,10 @@ inline double wurliVolumePot(float driveNorm) { return std::clamp(0.4 + driveNor
 
 // ---- Expression, modulation and macro mappings -------------------------------
 inline int bendRangeSemis(float norm) { return 1 + stepIndex(norm, 47); }
-inline float lfoRateHz(float norm) { return 0.05f * std::pow(800.0f, norm); }          // 0.05 .. 40 Hz
+// 0.05 .. 7.5 Hz over the first three quarters (as before), then up to 400 Hz: audio-rate wobble
+inline float lfoRateHz(float norm) {
+    return norm <= 0.75f ? 0.05f * std::pow(800.0f, norm) : 7.5212f * std::pow(53.18f, (norm - 0.75f) * 4.0f);
+}
 // Material: steel (0) -> glass (0.5) -> carbon fibre (1). g covers the first half, h the second.
 inline float materialDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 0.8f * g + 1.4f * h; }
 inline float materialBellDecayMul(float m) { const float g = std::min(1.0f, 2.0f * m), h = std::max(0.0f, 2.0f * m - 1.0f); return 1.0f + 1.5f * g + 1.5f * h; }
@@ -325,6 +379,62 @@ inline float compStaticGrDb(float over, float ratio, float knee) {
         return (1.0f / ratio - 1.0f) * t * t / (2.0f * knee);
     }
     return 0.0f;
+}
+
+// ---- Envelope filter, phaser, chorus ------------------------------------------
+inline bool switchOn(float norm) { return norm >= 0.5f; }
+inline float wahQ(float n) { return 0.7f * std::pow(20.0f, n); }                     // 0.7 .. 14
+inline float wahBaseHz(float n) { return 60.0f * std::pow(2.0f, n * 5.0f); }         // 60 Hz .. 1.9 kHz
+inline float wahReleaseMs(float n) { return 20.0f * std::pow(50.0f, n); }            // 20 ms .. 1 s
+inline float phaserDepthOct(float n) { return 6.0f * n; }
+inline float phaserFeedback(float n) { return 0.95f * (2.0f * n - 1.0f); }           // -95 .. +95 %
+inline int phaserStages(float n) { static constexpr int k[5] = {2, 4, 6, 8, 12}; return k[stepIndex(n, 4)]; }
+inline float phaserCenterHz(float n) { return 100.0f * std::pow(2.0f, n * 6.0f); }   // 100 Hz .. 6.4 kHz
+inline float chorusRateHz(float n) { return 0.05f * std::pow(160.0f, n); }           // 0.05 .. 8 Hz
+inline float chorusDelayMs(float n) { return 2.0f + 18.0f * n; }                     // 2 .. 20 ms
+// Easy controls: -1 .. +1 around the centre; Mod scales 0 .. 2x
+inline float easyOffset(float n) { return 2.0f * n - 1.0f; }
+inline float easyModScale(float n) { return 2.0f * n; }
+
+// The Easy knobs: each moves every setting behind one idea, as an offset on the panel knobs (so
+// the panel stays as set). Mod scales the modulation effects. The editor runs the same function
+// to show each knob where the Easy knobs have taken it.
+inline void applyEasyControls(float* p) {
+    auto add = [p](uint32_t id, float v) { p[id] = std::clamp(p[id] + v, 0.0f, 1.0f); };
+    const float d = easyOffset(p[kParamEasyDecay]);
+    if (d != 0.0f) {
+        add(kParamTineDecay, 0.55f * d);         // the tine or reed's ring
+        add(kParamToneBarCoupling, 0.20f * d);   // the tone bar's sustain
+        add(kParamReverbDecay, 0.40f * d);
+        add(kParamReverbMix, 0.15f * d);
+        add(kParamDelayFeedback, 0.30f * d);     // echo repeats
+        add(kParamSympathetic, 0.50f * std::max(0.0f, d));
+    }
+    const float t = easyOffset(p[kParamEasyTone]);
+    if (t != 0.0f) {
+        add(kParamBassBoost, -0.40f * t);
+        add(kParamTrebleBoost, 0.40f * t);
+        add(kParamTineBell, 0.35f * t);          // chime
+        add(kParamHammerHardness, 0.30f * t);
+        add(kParamEqB1Gain, -0.25f * t);         // low shelf, up to -/+ 6 dB
+        add(kParamEqB4Gain, 0.25f * t);          // high shelf
+        add(kParamCabMic, -0.35f * t);           // a miked cabinet: towards the cone centre
+    }
+    const float r = easyOffset(p[kParamEasyDrive]);
+    if (r != 0.0f) {
+        add(kParamPreampDrive, 0.60f * r);
+        add(kParamCabinet, 0.45f * r);           // cabinet drive
+        add(kParamPickupDistance, 0.25f * r);    // closer pickup: hotter, barkier
+        add(kParamHammerHardness, 0.15f * r);
+        add(kParamMasterVolume, -0.12f * r);     // keeps the level roughly where it was
+    }
+    const float m = easyModScale(p[kParamEasyMod]);
+    if (m != 1.0f) {
+        for (uint32_t id : {kParamTremoloDepth, kParamPhaserMix, kParamChorusMix, kParamWahAmount, kParamGapFmDepth}) {
+            p[id] = std::clamp(p[id] * m, 0.0f, 1.0f);
+        }
+        for (uint32_t id : {kParamPressureAmt, kParamSlideAmt}) p[id] = std::clamp(0.5f + (p[id] - 0.5f) * m, 0.0f, 1.0f);
+    }
 }
 
 // Parameter ids of the four EQ bands, shared by the DSP and the editor's curve
@@ -427,6 +537,34 @@ inline void formatParamDisplay(uint32_t id, float n, char* out, size_t size) {
         case kParamReverbPreDelay: std::snprintf(out, size, "%.0f ms", preDelayMs(n)); return;
         case kParamChorusMode: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Tri" : "Dual"); return;
         case kParamGapFmExact: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Exact" : "Free"); return;
+        case kParamWahOn: case kParamPhaserOn: case kParamTremOn: case kParamChorusOn:
+        case kParamEchoOn: case kParamReverbOn: case kParamEqOn: case kParamCompOn:
+            std::snprintf(out, size, "%s", switchOn(n) ? "On" : "Off"); return;
+        case kParamWahReso: std::snprintf(out, size, "Q %.1f", wahQ(n)); return;
+        case kParamWahMode: { const char* m[4] = {"Classic", "Low-pass", "Band-pass", "High-pass"}; std::snprintf(out, size, "%s", m[stepIndex(n, 3)]); return; }
+        case kParamWahDir: std::snprintf(out, size, "%s", stepIndex(n, 1) ? "Down" : "Up"); return;
+        case kParamWahFreq: case kParamPhaserCenter: {
+            const float hz = id == kParamWahFreq ? wahBaseHz(n) : phaserCenterHz(n);
+            if (hz >= 1000.0f) std::snprintf(out, size, "%.1f kHz", hz / 1000.0f);
+            else std::snprintf(out, size, "%.0f Hz", hz);
+            return;
+        }
+        case kParamWahRelease: std::snprintf(out, size, "%.0f ms", wahReleaseMs(n)); return;
+        case kParamPhaserDepth: std::snprintf(out, size, "%.1f oct", phaserDepthOct(n)); return;
+        case kParamPhaserFeedback: std::snprintf(out, size, "%+.0f%%", phaserFeedback(n) * 100.0f); return;
+        case kParamPhaserStages: std::snprintf(out, size, "%d stages", phaserStages(n)); return;
+        case kParamPhaserSpread: std::snprintf(out, size, "%.0f deg", n * 180.0f); return;
+        case kParamChorusRate: std::snprintf(out, size, "%.2f Hz", chorusRateHz(n)); return;
+        case kParamChorusDepth: std::snprintf(out, size, "%.0f%%", n * 200.0f); return;
+        case kParamChorusDelay: std::snprintf(out, size, "%.1f ms", chorusDelayMs(n)); return;
+        case kParamChorusWidth: std::snprintf(out, size, "%.0f%%", n * 200.0f); return;
+        case kParamEasyDecay: case kParamEasyTone: case kParamEasyDrive: {
+            const float v = easyOffset(n);
+            if (std::fabs(v) < 0.01f) std::snprintf(out, size, "0");
+            else std::snprintf(out, size, "%+.0f", v * 100.0f);
+            return;
+        }
+        case kParamEasyMod: std::snprintf(out, size, "%.0f%%", easyModScale(n) * 100.0f); return;
         case kParamCabType: {
             static const char* c[10] = {"Speaker (200A)", "Suitcase 4x10", "Twin 2x12 Open", "Deluxe 1x12", "Closed 2x12",
                                         "Studio Condenser", "Ribbon Mic", "Hi-Fi Monitor", "Radio", "Lo-Fi"};
@@ -444,7 +582,11 @@ inline void formatParamDisplay(uint32_t id, float n, char* out, size_t size) {
         case kParamTremSync: case kParamPhaserSync: case kParamEchoSync:
         case kParamLfo1Sync: case kParamLfo2Sync:
             std::snprintf(out, size, "%s", kSyncNames[stepIndex(n, 7)]); return;
-        case kParamLfo1Rate: case kParamLfo2Rate: std::snprintf(out, size, "%.2f Hz", lfoRateHz(n)); return;
+        case kParamLfo1Rate: case kParamLfo2Rate: {
+            const float hz = lfoRateHz(n);
+            std::snprintf(out, size, hz >= 100.0f ? "%.0f Hz" : hz >= 10.0f ? "%.1f Hz" : "%.2f Hz", hz);
+            return;
+        }
         case kParamLfo1Shape: case kParamLfo2Shape: {
             const char* sh[5] = {"Sine", "Triangle", "Saw", "Square", "S&H"};
             std::snprintf(out, size, "%s", sh[stepIndex(n, 4)]);

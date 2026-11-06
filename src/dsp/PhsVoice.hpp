@@ -312,14 +312,16 @@ private:
     // cents off, uneven voicing, decay and hammer wear. condition 0 = factory-perfect.
     void setCondition(int midiNote, float condition) {
         auto u = [midiNote](uint32_t seed) { return static_cast<float>(wurli::hashUnit(midiNote, seed) * 2.0 - 1.0); };
-        const float c = std::clamp(condition, 0.0f, 1.0f);
-        varCents_ = c * 7.0f * u(0xC0FFEE);
-        varDecay_ = 1.0f + 0.35f * c * u(0xDECA1);
-        varBell_ = 0.22f * c * u(0xBE11);
-        varHard_ = 0.16f * c * u(0x4A2D);
-        varGap_ = 0.12f * c * u(0x6A9);
-        varToneBar_ = 0.20f * c * u(0x70BA2);
-        varStrike_ = 0.08f * c * u(0x57121);
+        // Curved: about as before low on the knob (presets sit at 20 %), much stronger at the top
+        const float c0 = std::clamp(condition, 0.0f, 1.0f), c = c0 * (0.35f + 0.65f * c0);
+        // Up to +/- 20 cents, decay x0.4 .. x1.6, and clearly uneven voicing at full condition
+        varCents_ = c * 20.0f * u(0xC0FFEE);
+        varDecay_ = 1.0f + 0.60f * c * u(0xDECA1);
+        varBell_ = 0.40f * c * u(0xBE11);
+        varHard_ = 0.30f * c * u(0x4A2D);
+        varGap_ = 0.25f * c * u(0x6A9);
+        varToneBar_ = 0.35f * c * u(0x70BA2);
+        varStrike_ = 0.15f * c * u(0x57121);
     }
 
     // Damper position for a released key (see noteOff)

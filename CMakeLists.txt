@@ -178,7 +178,7 @@ if(APPLE)
       <key>name</key><string>mtyas: electropiano</string>
       <key>description</key><string>electropiano by mtyas - Port-Hamiltonian Rhodes &amp; Wurlitzer</string>
       <key>factoryFunction</key><string>PhsElectricPianoAUFactory</string>
-      <key>manufacturer</key><string>mtya</string>
+      <key>manufacturer</key><string>Mtya</string>
       <key>subtype</key><string>ePno</string>
       <key>type</key><string>aumu</string>
       <key>version</key><integer>${PHS_AU_VERSION}</integer>

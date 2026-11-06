@@ -47,51 +47,53 @@ public:
     void fillRect(const Rect& r, Color c) override { fillRoundRect(r, 0.0f, c); }
 
     void fillRoundRect(const Rect& r, float radius, Color c) override {
-        shape(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1, [&](float px, float py, Color& col) {
-            col = c;
-            return cov(-sdRoundRect(px, py, r, radius));
-        });
+        convex(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1, [&](float) { return c; },
+               [&](float px, float py) { return cov(-sdRoundRect(px, py, r, radius)); });
     }
     void fillRoundRectGradient(const Rect& r, float radius, Color top, Color bottom) override {
-        shape(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1, [&](float px, float py, Color& col) {
-            col = mix(bottom, top, std::clamp((py - r.y) / std::max(1.0f, r.h), 0.0f, 1.0f));
-            return cov(-sdRoundRect(px, py, r, radius));
-        });
+        convex(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1,
+               [&](float py) { return mix(bottom, top, std::clamp((py - r.y) / std::max(1.0f, r.h), 0.0f, 1.0f)); },
+               [&](float px, float py) { return cov(-sdRoundRect(px, py, r, radius)); });
     }
     void strokeRoundRect(const Rect& r, float radius, Color c, float width) override {
         const Rect mid = r.inset(width * 0.5f, width * 0.5f);
         const float rr = std::max(0.0f, radius - width * 0.5f);
-        shape(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1, [&](float px, float py, Color& col) {
+        // Rows clear of the corners only touch the stroke near the left and right edges
+        const float band = std::min(radius, std::min(r.w, r.h) * 0.5f) + width + 1.5f;
+        shapeRows(r.x - 1, r.y - 1, r.maxX() + 1, r.maxY() + 1, [&](float py, float& a0, float& a1, float& b0, float& b1) {
+            if (py > r.y + band && py < r.maxY() - band) {
+                a0 = r.x - 1; a1 = r.x + width + 1; b0 = r.maxX() - width - 1; b1 = r.maxX() + 1;
+            } else {
+                a0 = r.x - 1; a1 = r.maxX() + 1; b0 = b1 = 0.0f;
+            }
+        }, [&](float px, float py, Color& col) {
             col = c;
             return cov(width * 0.5f - std::fabs(sdRoundRect(px, py, mid, rr)));
         });
     }
     void fillCircle(float cx, float cy, float radius, Color c) override {
-        shape(cx - radius - 1, cy - radius - 1, cx + radius + 1, cy + radius + 1, [&](float px, float py, Color& col) {
-            col = c;
-            return cov(radius - std::hypot(px - cx, py - cy));
-        });
+        convex(cx - radius - 1, cy - radius - 1, cx + radius + 1, cy + radius + 1, [&](float) { return c; },
+               [&](float px, float py) { return cov(radius - std::hypot(px - cx, py - cy)); });
     }
     void fillCircleGradient(float cx, float cy, float radius, Color top, Color bottom) override {
-        shape(cx - radius - 1, cy - radius - 1, cx + radius + 1, cy + radius + 1, [&](float px, float py, Color& col) {
-            col = mix(bottom, top, std::clamp((py - (cy - radius)) / (2.0f * radius), 0.0f, 1.0f));
-            return cov(radius - std::hypot(px - cx, py - cy));
-        });
+        convex(cx - radius - 1, cy - radius - 1, cx + radius + 1, cy + radius + 1,
+               [&](float py) { return mix(bottom, top, std::clamp((py - (cy - radius)) / (2.0f * radius), 0.0f, 1.0f)); },
+               [&](float px, float py) { return cov(radius - std::hypot(px - cx, py - cy)); });
     }
     void strokeCircle(float cx, float cy, float radius, Color c, float width) override {
         const float o = radius + width;
-        shape(cx - o - 1, cy - o - 1, cx + o + 1, cy + o + 1, [&](float px, float py, Color& col) {
+        ring(cx, cy, radius, width * 0.5f, [&](float px, float py, Color& col) {
             col = c;
             return cov(width * 0.5f - std::fabs(std::hypot(px - cx, py - cy) - radius));
         });
+        (void)o;
     }
     void strokeArc(float cx, float cy, float radius, float a0, float a1, Color c, float width) override {
         const float lo = std::min(a0, a1), hi = std::max(a0, a1);
         const float hw = width * 0.5f;
         const float ex0 = cx + radius * std::cos(lo), ey0 = cy + radius * std::sin(lo);
         const float ex1 = cx + radius * std::cos(hi), ey1 = cy + radius * std::sin(hi);
-        const float o = radius + width;
-        shape(cx - o - 1, cy - o - 1, cx + o + 1, cy + o + 1, [&](float px, float py, Color& col) {
+        ring(cx, cy, radius, hw, [&](float px, float py, Color& col) {
             col = c;
             float a = std::atan2(py - cy, px - cx);
             while (a < lo) a += 6.28318531f;
@@ -117,18 +119,14 @@ public:
     }
     void shadowRoundRect(const Rect& r, float radius, float blur, float dy, Color c) override {
         const Rect s = r.offset(0, dy);
-        shape(s.x - blur - 1, s.y - blur - 1, s.maxX() + blur + 1, s.maxY() + blur + 1, [&](float px, float py, Color& col) {
-            col = c;
-            return soft(sdRoundRect(px, py, s, radius), blur);
-        });
+        convex(s.x - blur - 1, s.y - blur - 1, s.maxX() + blur + 1, s.maxY() + blur + 1, [&](float) { return c; },
+               [&](float px, float py) { return soft(sdRoundRect(px, py, s, radius), blur); });
     }
     void shadowCircle(float cx, float cy, float radius, float blur, float dy, Color c) override {
         cy += dy;
         const float o = radius + blur;
-        shape(cx - o - 1, cy - o - 1, cx + o + 1, cy + o + 1, [&](float px, float py, Color& col) {
-            col = c;
-            return soft(std::hypot(px - cx, py - cy) - radius, blur);
-        });
+        convex(cx - o - 1, cy - o - 1, cx + o + 1, cy + o + 1, [&](float) { return c; },
+               [&](float px, float py) { return soft(std::hypot(px - cx, py - cy) - radius, blur); });
     }
     void glowCircle(float cx, float cy, float radius, float blur, Color c) override { shadowCircle(cx, cy, radius, blur, 0.0f, c); }
 
@@ -194,29 +192,106 @@ private:
     // Evaluates f at every pixel centre of the logical bounds (y-up) and blends the result
     template <class F>
     void shape(float lx0, float ly0, float lx1, float ly1, F&& f) {
+        shapeRows(lx0, ly0, lx1, ly1, [&](float, float& a0, float& a1, float& b0, float& b1) {
+            a0 = lx0; a1 = lx1; b0 = b1 = 0.0f;
+        }, f);
+    }
+
+    // As shape(), but each row only visits up to two spans [a0, a1) and [b0, b1) (logical x)
+    // that spans(py, ...) picks: the rest of the row is known to be untouched
+    template <class S, class F>
+    void shapeRows(float lx0, float ly0, float lx1, float ly1, S&& spans, F&& f) {
         const int x0 = std::max(state_.clip.x0, static_cast<int>(std::floor(lx0)));
         const int x1 = std::min(state_.clip.x1, static_cast<int>(std::ceil(lx1)));
         const int y0 = std::max(state_.clip.y0, static_cast<int>(std::floor(h_ - ly1)));
         const int y1 = std::min(state_.clip.y1, static_cast<int>(std::ceil(h_ - ly0)));
+        if (x0 >= x1) return;
         Color col{};
         for (int dy = y0; dy < y1; ++dy) {
             const float py = static_cast<float>(h_) - (dy + 0.5f);
             uint32_t* row = pixels_.data() + static_cast<size_t>(dy) * w_;
-            for (int dx = x0; dx < x1; ++dx) {
-                const float a = f(dx + 0.5f, py, col);
-                if (a > 0.0f) blend(row[dx], col, a * col.a * state_.alpha);
+            float s[4];
+            spans(py, s[0], s[1], s[2], s[3]);
+            int prevEnd = x0;
+            for (int k = 0; k < 2; ++k) {
+                if (!(s[2 * k + 1] > s[2 * k])) continue;
+                const int sx0 = std::max(prevEnd, std::max(x0, static_cast<int>(std::floor(s[2 * k]))));
+                const int sx1 = std::min(x1, static_cast<int>(std::ceil(s[2 * k + 1])));
+                for (int dx = sx0; dx < sx1; ++dx) {
+                    const float a = f(dx + 0.5f, py, col);
+                    if (a > 0.0f) blend(row[dx], col, a * col.a * state_.alpha);
+                }
+                prevEnd = std::max(prevEnd, sx1);
             }
         }
     }
 
+    // A convex shape: coverage(px, py) rises from the edges to 1 inside, so each row is
+    // anti-aliased from both ends inward and the run between is a plain fill. rowColor(py)
+    // gives the colour of a row (vertical gradients are constant along it).
+    template <class RC, class CV>
+    void convex(float lx0, float ly0, float lx1, float ly1, RC&& rowColor, CV&& coverage) {
+        const int x0 = std::max(state_.clip.x0, static_cast<int>(std::floor(lx0)));
+        const int x1 = std::min(state_.clip.x1, static_cast<int>(std::ceil(lx1)));
+        const int y0 = std::max(state_.clip.y0, static_cast<int>(std::floor(h_ - ly1)));
+        const int y1 = std::min(state_.clip.y1, static_cast<int>(std::ceil(h_ - ly0)));
+        if (x0 >= x1) return;
+        for (int dy = y0; dy < y1; ++dy) {
+            const float py = static_cast<float>(h_) - (dy + 0.5f);
+            uint32_t* row = pixels_.data() + static_cast<size_t>(dy) * w_;
+            const Color col = rowColor(py);
+            const float alpha = col.a * state_.alpha;
+            if (alpha <= 0.0f) continue;
+            int xl = x0;
+            for (; xl < x1; ++xl) {
+                const float a = coverage(xl + 0.5f, py);
+                if (a >= 1.0f) break;
+                if (a > 0.0f) blend(row[xl], col, a * alpha);
+            }
+            int xr = x1 - 1;
+            for (; xr > xl; --xr) {
+                const float a = coverage(xr + 0.5f, py);
+                if (a >= 1.0f) break;
+                if (a > 0.0f) blend(row[xr], col, a * alpha);
+            }
+            if (xl <= xr && xl < x1) fillSpan(row + xl, xr - xl + 1, col, alpha);
+        }
+    }
+
+    // A ring around (cx, cy) at `radius`, `hw` either side: each row only visits the pixels
+    // whose distance from the centre is within the ring
+    template <class F>
+    void ring(float cx, float cy, float radius, float hw, F&& f) {
+        const float ro = radius + hw + 1.5f, ri = std::max(0.0f, radius - hw - 1.5f);
+        shapeRows(cx - ro, cy - ro, cx + ro, cy + ro, [&](float py, float& a0, float& a1, float& b0, float& b1) {
+            const float d = py - cy;
+            const float xo = std::sqrt(std::max(0.0f, ro * ro - d * d));
+            const float xi = std::fabs(d) < ri ? std::sqrt(ri * ri - d * d) : 0.0f;
+            a0 = cx - xo; a1 = cx - xi + 1.0f;
+            b0 = cx + xi - 1.0f; b1 = cx + xo;
+        }, f);
+    }
+
+    static uint32_t pack(Color c) {
+        auto ch = [](float v) { return static_cast<uint32_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+        return (ch(c.r) << 16) | (ch(c.g) << 8) | ch(c.b);
+    }
+    static void fillSpan(uint32_t* dst, int n, Color c, float alpha) {
+        const uint32_t src = pack(c);
+        if (alpha >= 0.999f) { std::fill(dst, dst + n, src); return; }
+        const uint32_t a = static_cast<uint32_t>(alpha * 256.0f + 0.5f);
+        for (int i = 0; i < n; ++i) dst[i] = blendPacked(dst[i], src, a);
+    }
+    // a: 0 .. 256
+    static uint32_t blendPacked(uint32_t d, uint32_t s, uint32_t a) {
+        const uint32_t ia = 256 - a;
+        const uint32_t rb = (((s & 0xFF00FF) * a + (d & 0xFF00FF) * ia) >> 8) & 0xFF00FF;
+        const uint32_t g = (((s & 0x00FF00) * a + (d & 0x00FF00) * ia) >> 8) & 0x00FF00;
+        return rb | g;
+    }
     static void blend(uint32_t& dst, Color c, float a) {
         if (a <= 0.0f) return;
-        a = std::min(a, 1.0f);
-        const float dr = ((dst >> 16) & 0xFF) / 255.0f, dg = ((dst >> 8) & 0xFF) / 255.0f, db = (dst & 0xFF) / 255.0f;
-        const auto ch = [&](float s, float d) {
-            return static_cast<uint32_t>(std::lround(std::clamp(d + (s - d) * a, 0.0f, 1.0f) * 255.0f));
-        };
-        dst = (ch(c.r, dr) << 16) | (ch(c.g, dg) << 8) | ch(c.b, db);
+        dst = blendPacked(dst, pack(c), static_cast<uint32_t>(std::min(a, 1.0f) * 256.0f + 0.5f));
     }
 
     void blitGlyph(const fontatlas::Face* face, const fontatlas::Glyph& g, int ox, int oy, Color c) {

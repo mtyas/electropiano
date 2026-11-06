@@ -89,6 +89,10 @@ struct ScopeSnapshot {
     std::array<float, kScopeRingSize> phaseW{};
     std::array<float, kScopeRingSize> phaseV{};
     uint32_t writePos = 0;
+    // Modulation, for the Mod page: each LFO's phase (0..1) and value (-1..1), and what each
+    // matrix slot is adding to its target right now (normalised, after Easy Mod)
+    float lfoPhase[2]{}, lfoValue[2]{};
+    float slotMod[kNumModSlots]{};
 };
 
 static_assert(std::is_trivially_copyable<ScopeSnapshot>::value, "the scope is published with memcpy");
@@ -593,6 +597,13 @@ public:
             }
             scope_.activeVoices = 0;
             scope_.meterL = scope_.meterR = scope_.ampIn = scope_.ampOut = 0.0f;
+            // Nothing sounds, but the Mod page still shows the LFOs running
+            prepareModulationBlock(targets);
+            for (int i = 0; i < 2; ++i) {
+                lfoPhase_[i] += lfoInc_[i] * static_cast<float>(numSamples);
+                lfoPhase_[i] -= std::floor(lfoPhase_[i]);
+            }
+            publishModulation();
             activeNoteMaskLow_.store(0, std::memory_order_relaxed);
             activeNoteMaskHigh_.store(0, std::memory_order_relaxed);
             publishScope();
@@ -600,20 +611,33 @@ public:
         }
 
         prepareModulationBlock(targets);
+        easyActive_ = false;
+        for (uint32_t id : {kParamEasyDecay, kParamEasyTone, kParamEasyDrive, kParamEasyMod}) {
+            easyActive_ = easyActive_ || std::fabs(targets[id] - 0.5f) > 1e-4f || std::fabs(smoothedParams_[id] - 0.5f) > 1e-4f;
+        }
         // Pitch-bend range or MPE mode may have changed: keep the sounding notes in step
         refreshExpression();
 
         // Keyboard spread and sympathetic resonance, set up once per block
         const float spread = targets[kParamStereoSpread] * 0.75f;
         auto panOf = [spread](int note) { return spread * std::clamp((static_cast<float>(note) - 64.0f) / 40.0f, -1.0f, 1.0f); };
-        const float sympAmount = targets[kParamSympathetic];
+        // Easy Decay adds sympathetic ring too
+        float sympAmount = targets[kParamSympathetic];
+        if (easyActive_) {
+            float easy[kNumParams];
+            std::memcpy(easy, targets, sizeof(easy));
+            applyEasyControls(easy);
+            sympAmount = easy[kParamSympathetic];
+        }
         const bool sympOn = sympAmount > 0.001f;
         float panByNote[128];
         for (int n = 0; n < 128; ++n) panByNote[n] = panOf(n);
         if (sympOn) {
             bool soundingNote[128] = {};
             updateSympatheticTuning(targets);
-            symp_.setDampers(pedalDamperDepth() < 0.1f);
+            // Pedal down: every damper lifts. Pedal up: the knob still lets the harp ring a
+            // little (the dampers only lightly touch), so the effect is there without a pedal
+            symp_.setDampers(pedalDamperDepth() < 0.1f ? 1.0 : 0.45 * sympAmount * sympAmount);
             for (const auto& v : voices_) if (v.isActive()) soundingNote[v.getSoundingNote() & 127] = true;
             symp_.setBlockRouting(soundingNote, panByNote);
         }
@@ -647,9 +671,10 @@ public:
             int countThisSample = 0;
 
             const float* liveParams = smoothedParams_.data();
-            if (modActive_ || hostModActive_) {
-                advanceModulation();
+            advanceModulation(); // always, so the Mod page shows the LFOs running
+            if (modActive_ || hostModActive_ || easyActive_) {
                 std::memcpy(modParams_, smoothedParams_.data(), sizeof(modParams_));
+                if (easyActive_) applyEasyControls(modParams_);
                 applyModulation(modParams_);
                 if (hostModActive_) {
                     for (uint32_t i = 0; i < kNumParams; ++i) {
@@ -705,8 +730,10 @@ public:
             if (sympOn && symp_.isActive()) {
                 float sympSide = 0.0f;
                 const float symp = symp_.process(voiceSum, sympSide);
-                voiceSum += kSympatheticGain * sympAmount * symp;
-                sideSum += kSympatheticGain * sympAmount * sympSide;
+                // Gentle low on the knob (the factory presets sit at 20 %), strong at the top
+                const float g = kSympatheticGain * sympAmount * (1.0f + 7.0f * sympAmount * sympAmount);
+                voiceSum += g * symp;
+                sideSum += g * sympSide;
             }
             effects_.processStereoSample(voiceSum * kVoiceMixGain, sideSum * kVoiceMixGain, liveParams, modWheel_, left, right);
             {
@@ -760,6 +787,7 @@ public:
         scope_.limiterReductionDb = effects_.limiterReductionDb();
         activeNoteMaskLow_.store(maskLow, std::memory_order_relaxed);
         activeNoteMaskHigh_.store(maskHigh, std::memory_order_relaxed);
+        publishModulation();
         publishScope();
         // -100 dBFS with nothing sounding counts toward going idle
         silentSamples_ = (activeCount == 0 && blockPeak < 1e-5f) ? silentSamples_ + static_cast<uint32_t>(numSamples) : 0;
@@ -981,11 +1009,13 @@ private:
             const uint32_t base = kFirstModSlotParam + static_cast<uint32_t>(i) * 3;
             const int src = stepIndex(targets[base], kNumModSources - 1);
             const uint32_t dst = modDestParam(targets[base + 1]);
-            const float amt = modAmount(targets[base + 2]);
+            // Easy Mod scales every slot: 0 turns the matrix off, the centre leaves it as set
+            const float amt = modAmount(targets[base + 2]) * easyModScale(targets[kParamEasyMod]);
             if (src == kSrcNone || dst >= kNumParams || std::fabs(amt) < 0.002f) continue;
             slotSrc_[numSlots_] = src;
             slotDst_[numSlots_] = dst;
             slotAmt_[numSlots_] = amt;
+            slotIndex_[numSlots_] = i;
             ++numSlots_;
         }
         modActive_ = numSlots_ > 0;
@@ -1031,6 +1061,15 @@ private:
         float p = globalPressure_;
         for (float c : chPressure_) p = std::max(p, c);
         return p;
+    }
+
+    void publishModulation() {
+        for (int i = 0; i < 2; ++i) {
+            scope_.lfoPhase[i] = lfoPhase_[i];
+            scope_.lfoValue[i] = lfoValue_[i];
+        }
+        for (float& v : scope_.slotMod) v = 0.0f;
+        for (int i = 0; i < numSlots_; ++i) scope_.slotMod[slotIndex_[i]] = slotAmt_[i] * sourceValue(slotSrc_[i]);
     }
 
     // Adds every active slot (source x amount) to its destination, then clamps what it touched
@@ -1094,6 +1133,8 @@ private:
     int slotSrc_[kNumModSlots]{};
     uint32_t slotDst_[kNumModSlots]{};
     float slotAmt_[kNumModSlots]{};
+    int slotIndex_[kNumModSlots]{};
+    bool easyActive_ = false;
     int lfoShape_[2]{};
     float lfoInc_[2]{}, lfoPhase_[2]{}, lfoValue_[2]{}, lfoHold_[2]{};
     float lastVelocity_ = 0.0f, lastKey_ = 0.5f, randomValue_ = 0.0f;

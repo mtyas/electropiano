@@ -124,10 +124,8 @@ public:
         studioHall_.reset();
         plate_.reset();
         bbdLpL_ = bbdLpR_ = 0.0f;
-        for (int s = 0; s < 4; ++s) {
-            phaserStateL_[s] = 0.0f;
-            phaserStateR_[s] = 0.0f;
-        }
+        phaserStateL_.fill(0.0f);
+        phaserStateR_.fill(0.0f);
 
         amp200A_.reset();
         for (int k = 0; k < 2; ++k) {
@@ -208,24 +206,38 @@ public:
         //    playing dynamics, in front of the amp like a pedal
         // =========================================================================
         float x = monoIn;
-        const float wahAmount = params[kParamWahAmount];
+        const float wahAmount = switchOn(params[kParamWahOn]) ? params[kParamWahAmount] : 0.0f;
         if (wahAmount > 0.001f) {
+            if (params[kParamWahRelease] != wahReleaseParam_) {
+                wahReleaseParam_ = params[kParamWahRelease];
+                wahRelease_ = 1.0f - std::exp(-dt_ / (0.001f * wahReleaseMs(wahReleaseParam_)));
+            }
             const float level = std::fabs(x);
             wahEnv_ += (level > wahEnv_ ? wahAttack_ : wahRelease_) * (level - wahEnv_);
             if ((wahCounter_++ & 7) == 0) {
                 const float drive = wahEnv_ * 4.0f * std::pow(2.0f, params[kParamWahSens] * 6.0f - 1.0f);
                 const float sweep = std::clamp(drive / (1.0f + drive), 0.0f, 1.0f);
-                const float fc = std::min(220.0f * std::pow(2.0f, sweep * (2.0f + 2.8f * wahAmount)), 0.40f * fs_);
+                const float range = 2.0f + 2.8f * wahAmount; // octaves
+                // Up: rests at the base frequency and opens with the playing; down: the reverse
+                const float oct = stepIndex(params[kParamWahDir], 1) == 1 ? (1.0f - sweep) * range : sweep * range;
+                const float fc = std::min(wahBaseHz(params[kParamWahFreq]) * std::pow(2.0f, oct), 0.40f * fs_);
                 wahG_ = std::tan(3.14159265f * fc * dt_);
             }
-            const float k = 1.0f / 4.0f; // Q = 4
+            const float k = 1.0f / wahQ(params[kParamWahReso]);
             const float a1 = 1.0f / (1.0f + wahG_ * (wahG_ + k));
             const float v3 = x - wahLow_;
             const float v1 = a1 * wahBand_ + wahG_ * a1 * v3;
             const float v2 = wahLow_ + wahG_ * v1;
             wahBand_ = 2.0f * v1 - wahBand_;
             wahLow_ = 2.0f * v2 - wahLow_;
-            const float wet = 0.7f * v2 + 1.1f * v1;
+            // The band output peaks at Q, so the single modes are levelled against it
+            float wet;
+            switch (stepIndex(params[kParamWahMode], 3)) {
+                case 1: wet = v2 * std::min(1.0f, 2.0f * std::sqrt(k)); break;   // low-pass
+                case 2: wet = 3.0f * std::sqrt(k) * v1; break;                   // band-pass (peak 3 sqrt(Q), as loud as classic)
+                case 3: wet = x - k * v1 - v2; break;                            // high-pass
+                default: wet = 0.7f * v2 + 1.1f * v1; break;                     // classic
+            }
             x = x + wahAmount * (wet - x);
         }
 
@@ -237,7 +249,7 @@ public:
             // Wurlitzer 200A: pickup volts into the DK preamp, LDR vibrato inside its
             // feedback loop, volume pot, power amp (OpenWurli). Drive = the volume pot.
             amp200A_.setVolume(wurliVolumePot(params[kParamPreampDrive]));
-            amp200A_.setTremoloDepth(std::clamp(params[kParamTremoloDepth] + 0.75f * modWheel, 0.0f, 1.0f));
+            amp200A_.setTremoloDepth(switchOn(params[kParamTremOn]) ? std::clamp(params[kParamTremoloDepth] + 0.75f * modWheel, 0.0f, 1.0f) : 0.0f);
             amp200A_.setTremoloRateScale(syncedHz(tremoloRateHz(params[kParamTremoloRate]), params[kParamTremSync], bpm_) / wurli::Tremolo::kNaturalRateHz);
             ampOut = static_cast<float>(amp200A_.process(x / (kVoiceUnitsPerVolt * kVoiceMixGain))) * kAmp200AOutputTrim;
         } else {
@@ -288,7 +300,7 @@ public:
 
         // Control-rate LFOs: the transcendental maths behind every modulator is evaluated
         // once per kCtrlRate samples and linearly ramped, which is inaudible at <12 Hz rates.
-        const float tremDepth = std::clamp(params[kParamTremoloDepth] + 0.75f * modWheel, 0.0f, 1.0f);
+        const float tremDepth = switchOn(params[kParamTremOn]) ? std::clamp(params[kParamTremoloDepth] + 0.75f * modWheel, 0.0f, 1.0f) : 0.0f;
         if (ctrlCountdown_ == 0) {
             updateControlRateLfos(params, modelType, tremDepth);
         }
@@ -300,15 +312,17 @@ public:
         // =========================================================================
         // 3. 4-Stage Optical All-Pass Phaser
         // =========================================================================
-        const float phaserMix = params[kParamPhaserMix];
+        const float phaserMix = switchOn(params[kParamPhaserOn]) ? params[kParamPhaserMix] : 0.0f;
         if (phaserMix > 0.001f) {
             const float aL = lfoCur_[kLfoPhaserAL];
             const float aR = lfoCur_[kLfoPhaserAR];
+            const float fb = phaserFeedback(params[kParamPhaserFeedback]);
+            const int stages = phaserStages(params[kParamPhaserStages]);
 
-            float yL = sigL + 0.42f * phaserFbL_;
-            float yR = sigR + 0.42f * phaserFbR_;
+            float yL = sigL + fb * phaserFbL_;
+            float yR = sigR + fb * phaserFbR_;
 
-            for (int s = 0; s < 4; ++s) {
+            for (int s = 0; s < stages; ++s) {
                 const float nextL = aL * yL + phaserStateL_[s];
                 phaserStateL_[s] = yL - aL * nextL;
                 yL = nextL;
@@ -335,7 +349,7 @@ public:
         // =========================================================================
         // 5. Vintage BBD Stereo Tri-Chorus (Dyno-My-Piano style)
         // =========================================================================
-        const float chorusMix = params[kParamChorusMix];
+        const float chorusMix = switchOn(params[kParamChorusOn]) ? params[kParamChorusMix] : 0.0f;
         if (chorusMix > 0.001f && !chorusBufL_.empty()) {
             const size_t bufSize = chorusBufL_.size();
             chorusBufL_[chorusWriteIdx_] = sigL;
@@ -359,6 +373,11 @@ public:
             }
 
             if (++chorusWriteIdx_ >= bufSize) chorusWriteIdx_ = 0;
+            // Width: the wet signal's side part, 0 (mono) .. 2x
+            const float width = 2.0f * params[kParamChorusWidth];
+            const float wetMid = 0.5f * (wetL + wetR), wetSide = 0.5f * (wetL - wetR) * width;
+            wetL = wetMid + wetSide;
+            wetR = wetMid - wetSide;
 
             sigL = sigL * (1.0f - 0.45f * chorusMix) + wetL * (0.55f * chorusMix);
             sigR = sigR * (1.0f - 0.45f * chorusMix) + wetR * (0.55f * chorusMix);
@@ -367,7 +386,7 @@ public:
         // =========================================================================
         // 6. Tape / BBD echo: filtered, saturating feedback with ping-pong spread
         // =========================================================================
-        const float echoMix = params[kParamDelayMix];
+        const float echoMix = switchOn(params[kParamEchoOn]) ? params[kParamDelayMix] : 0.0f;
         if (echoMix > 0.001f) {
             if (params[kParamDelayTime] != echoTimeParam_ || params[kParamEchoSync] != echoSyncParam_ || bpm_ != echoBpm_) {
                 echoTimeParam_ = params[kParamDelayTime];
@@ -404,7 +423,7 @@ public:
         // =========================================================================
         // 7. Stereo Spring / Hall Reverb
         // =========================================================================
-        const float revMix = params[kParamReverbMix];
+        const float revMix = switchOn(params[kParamReverbOn]) ? params[kParamReverbMix] : 0.0f;
         const int revAlgo = reverbAlgo(params[kParamReverbType]);
         // Pre-delay (shared by every reverb); 0 ms reads the current sample
         float preL = sigL, preR = sigR;
@@ -502,8 +521,9 @@ public:
             key += params[kParamEqB1Shelf] * 11.0f + params[kParamEqB4Shelf] * 13.0f;
             const bool changed = key != eqKey_;
             eqKey_ = key;
+            const bool eqOn = switchOn(params[kParamEqOn]);
             for (int b = 0; b < 4; ++b) {
-                const bool active = std::fabs(eqGainDb(params[kEqGainId[b]])) > 0.05f;
+                const bool active = eqOn && std::fabs(eqGainDb(params[kEqGainId[b]])) > 0.05f;
                 if (changed) {
                     setupEqBand(eqBq_[0][b], b, params, fs_);
                     eqBq_[1][b].copyCoefficients(eqBq_[0][b]); // same coefficients, own state
@@ -524,7 +544,7 @@ public:
 
         // Bus compressor: stereo-linked, peak or RMS detector with a sidechain high-pass, soft knee,
         // attack / release, manual and automatic make-up, and a parallel mix
-        const float compMix = params[kParamCompAmount];
+        const float compMix = switchOn(params[kParamCompOn]) ? params[kParamCompAmount] : 0.0f;
         if (compMix > 0.001f) {
             const float thr = compThreshDb(params[kParamCompThresh]);
             const float ratio = compRatio(params[kParamCompRatio]);
@@ -658,9 +678,14 @@ private:
         const float period = static_cast<float>(kCtrlRate) * dt_;
         phaserPhase_ += syncedHz(phaserRateHz(params[kParamPhaserRate]), params[kParamPhaserSync], bpm_) * period;
         if (phaserPhase_ >= 1.0f) phaserPhase_ -= 1.0f;
+        phaserCenter_ = phaserCenterHz(params[kParamPhaserCenter]);
+        phaserDepth_ = phaserDepthOct(params[kParamPhaserDepth]);
+        phaserSpread_ = 0.5f * params[kParamPhaserSpread];
+        chorusDepth_ = 2.0f * params[kParamChorusDepth];
+        chorusBaseMs_ = chorusDelayMs(params[kParamChorusDelay]);
         tremPhase_ += syncedHz(tremoloRateHz(params[kParamTremoloRate]), params[kParamTremSync], bpm_) * period;
         if (tremPhase_ >= 1.0f) tremPhase_ -= 1.0f;
-        chorusPhase_ += 0.65f * period;
+        chorusPhase_ += chorusRateHz(params[kParamChorusRate]) * period;
         if (chorusPhase_ >= 1.0f) chorusPhase_ -= 1.0f;
 
         float target[kNumLfoOutputs];
@@ -676,12 +701,12 @@ private:
     void evalLfoOutputs(int modelType, float tremDepth, float* out) const {
         // Phaser all-pass coefficients
         {
-            const float lfoL = 0.5f + 0.5f * std::sin(6.2831853f * phaserPhase_);
-            const float lfoR = 0.5f + 0.5f * std::sin(6.2831853f * (phaserPhase_ + 0.18f));
-            const float fMin = 240.0f;
-            const float fMax = 2100.0f;
-            const float fL = fMin * std::pow(fMax / fMin, lfoL);
-            const float fR = fMin * std::pow(fMax / fMin, lfoR);
+            // The sweep spans phaserDepth_ octaves around the centre; the right side runs
+            // phaserSpread_ of a cycle behind the left
+            const float lfoL = std::sin(6.2831853f * phaserPhase_);
+            const float lfoR = std::sin(6.2831853f * (phaserPhase_ + phaserSpread_));
+            const float fL = phaserCenter_ * std::exp2(0.5f * phaserDepth_ * lfoL);
+            const float fR = phaserCenter_ * std::exp2(0.5f * phaserDepth_ * lfoR);
             const float tL = std::tan(3.14159265f * std::min(fL, 0.4f * fs_) * dt_);
             const float tR = std::tan(3.14159265f * std::min(fR, 0.4f * fs_) * dt_);
             out[kLfoPhaserAL] = (1.0f - tL) / (1.0f + tL);
@@ -706,11 +731,14 @@ private:
         // BBD chorus delay times (in samples)
         const float modL = 0.5f + 0.5f * std::sin(6.2831853f * chorusPhase_);
         const float modR = 0.5f + 0.5f * std::cos(6.2831853f * chorusPhase_);
-        out[kLfoChorusDL] = (7.5f + 4.5f * modL) * 0.001f * fs_;
-        out[kLfoChorusDR] = (8.5f + 4.5f * modR) * 0.001f * fs_;
+        // Base delay and depth from the knobs (at their defaults: 7.5 / 8.5 ms + 4.5 ms dual,
+        // 6 ms + 5 ms tri), kept inside the 60 ms line
+        const float maxMs = 55.0f;
+        out[kLfoChorusDL] = std::min(maxMs, chorusBaseMs_ + 4.5f * chorusDepth_ * modL) * 0.001f * fs_;
+        out[kLfoChorusDR] = std::min(maxMs, chorusBaseMs_ + 1.0f + 4.5f * chorusDepth_ * modR) * 0.001f * fs_;
         for (int k = 0; k < 3; ++k) {
             const float mk = 0.5f + 0.5f * std::sin(6.2831853f * (chorusPhase_ + k / 3.0f));
-            out[kLfoTri0 + k] = (6.0f + 5.0f * mk) * 0.001f * fs_;
+            out[kLfoTri0 + k] = std::min(maxMs, std::max(0.5f, chorusBaseMs_ - 1.5f) + 5.0f * chorusDepth_ * mk) * 0.001f * fs_;
         }
     }
 
@@ -825,10 +853,13 @@ private:
     float tremPhase_ = 0.0f;
     float phaserPhase_ = 0.0f;
     float chorusPhase_ = 0.0f;
+    float phaserCenter_ = 709.9f, phaserDepth_ = 3.13f, phaserSpread_ = 0.18f;
+    float chorusDepth_ = 1.0f, chorusBaseMs_ = 7.5f;
+    float wahReleaseParam_ = -1.0f;
     float phaserFbL_ = 0.0f;
     float phaserFbR_ = 0.0f;
-    std::array<float, 4> phaserStateL_{};
-    std::array<float, 4> phaserStateR_{};
+    std::array<float, 12> phaserStateL_{};
+    std::array<float, 12> phaserStateR_{};
 
     std::vector<float> chorusBufL_;
     std::vector<float> chorusBufR_;

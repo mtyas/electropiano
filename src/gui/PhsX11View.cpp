@@ -76,11 +76,33 @@ void openUrl(const std::string& url) {
     }
 }
 
-void present(X11Editor& e) {
+// full: repaint everything; otherwise only the regions the editor reports as changed
+void present(X11Editor& e, bool full) {
     if (!e.image) return;
+    int px0 = 0, py0 = 0, px1 = e.width, py1 = e.height; // pixels to send, top-down
     {
         phs::gui::ScaledCanvas scaled(e.canvas, e.zoom);
-        e.editor->draw(scaled);
+        const std::vector<phs::gui::Rect> dirty = full ? std::vector<phs::gui::Rect>{} : e.editor->dirtyRects();
+        const bool whole = full || (dirty.size() == 1 && dirty[0].w >= phs::kEditorWidth && dirty[0].h >= phs::kEditorHeight);
+        if (whole) {
+            e.editor->draw(scaled);
+        } else {
+            if (dirty.empty()) return;
+            px0 = e.width; py0 = e.height; px1 = py1 = 0;
+            for (const auto& r : dirty) {
+                e.canvas.save();
+                scaled.clip(r);
+                e.editor->draw(scaled, r);
+                e.canvas.restore();
+                px0 = std::min(px0, static_cast<int>(r.x * e.zoom) - 1);
+                px1 = std::max(px1, static_cast<int>(r.maxX() * e.zoom) + 2);
+                py0 = std::min(py0, static_cast<int>((phs::kEditorHeight - r.maxY()) * e.zoom) - 1);
+                py1 = std::max(py1, static_cast<int>((phs::kEditorHeight - r.y) * e.zoom) + 2);
+            }
+            px0 = std::max(0, px0); py0 = std::max(0, py0);
+            px1 = std::min(e.width, px1); py1 = std::min(e.height, py1);
+            if (px0 >= px1 || py0 >= py1) return;
+        }
     }
     Visual* vis = DefaultVisual(e.dpy, DefaultScreen(e.dpy));
     if (vis->red_mask != 0xFF0000 || vis->green_mask != 0x00FF00 || vis->blue_mask != 0x0000FF) {
@@ -100,7 +122,7 @@ void present(X11Editor& e) {
         }
         e.image->data = reinterpret_cast<char*>(e.converted.data());
     }
-    XPutImage(e.dpy, e.win, e.gc, e.image, 0, 0, 0, 0, e.width, e.height);
+    XPutImage(e.dpy, e.win, e.gc, e.image, px0, py0, px0, py0, px1 - px0, py1 - py0);
     XFlush(e.dpy);
 }
 
@@ -170,12 +192,10 @@ void eventLoop(X11Editor* e) {
                     break;
             }
         }
-        if (needsPaint || e->editor->wantsRedraw()) {
-            present(*e);
-            needsPaint = false;
-        }
+        present(*e, needsPaint);
+        needsPaint = false;
         pollfd pfd{fd, POLLIN, 0};
-        poll(&pfd, 1, 33); // wake on X events, otherwise ~30 fps
+        poll(&pfd, 1, 16); // wake on X events, otherwise ~60 fps (most ticks repaint little or nothing)
     }
 }
 

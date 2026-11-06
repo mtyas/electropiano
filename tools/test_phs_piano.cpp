@@ -357,7 +357,7 @@ bool testAuBundle(const char* dylibPath) {
         return false;
     }
 
-    AudioComponentDescription desc{'aumu', 'PhsE', 'PyPH', 0, 0};
+    AudioComponentDescription desc{'aumu', 'ePno', 'Mtya', 0, 0};
     AudioComponentPlugInInterface* plug = factory(&desc);
     if (!plug || !plug->Open || !plug->Lookup) {
         std::fprintf(stderr, "  FAIL: AU Factory returned null\n");
@@ -1252,8 +1252,9 @@ bool testPlayability() {
         if (sounding > 8) { std::fprintf(stderr, "  !! polyphony limit ignored\n"); ok = false; }
     }
 
-    // Sympathetic resonance: with the pedal down it adds a resonance of its own, well below the
-    // notes (colour, not level); with the pedal up it adds nothing
+    // Sympathetic resonance: with the pedal down it adds a resonance of its own, below the notes
+    // (colour, not level); with the pedal up it is near silent at the default and, high on the
+    // knob, lets the harp ring lightly after the keys are released
     {
         auto play = [&](float amount, int pedal) {
             auto e = fresh(0);
@@ -1272,10 +1273,14 @@ bool testPlayability() {
             for (size_t i = 0; i < with.size(); ++i) { d += double(with[i] - without[i]) * (with[i] - without[i]); s0 += double(without[i]) * without[i]; }
             return 10.0 * std::log10(d / (s0 + 1e-30) + 1e-30);
         };
-        const auto off = play(0.0f, 127), on = play(0.2f, 127), full = play(1.0f, 127), upOff = play(0.0f, 0), upOn = play(1.0f, 0);
-        const double atDefault = addedDb(on, off), atFull = addedDb(full, off), pedalUp = addedDb(upOn, upOff);
-        std::printf("  -> sympathetic resonance re the notes: 20%% %.1f dB | 100%% %.1f dB | pedal up %.1f dB\n", atDefault, atFull, pedalUp);
-        if (!allFinite(full) || atDefault < -45.0 || atDefault > -15.0 || atFull > -3.0 || pedalUp > -60.0) {
+        const auto off = play(0.0f, 127), on = play(0.2f, 127), full = play(1.0f, 127);
+        const auto upOff = play(0.0f, 0), upDefault = play(0.2f, 0), upFull = play(1.0f, 0);
+        const double atDefault = addedDb(on, off), atFull = addedDb(full, off);
+        const double pedalUpDefault = addedDb(upDefault, upOff), pedalUpFull = addedDb(upFull, upOff);
+        std::printf("  -> sympathetic resonance re the notes: 20%% %.1f dB | 100%% %.1f dB | pedal up 20%% %.1f dB, 100%% %.1f dB\n",
+                    atDefault, atFull, pedalUpDefault, pedalUpFull);
+        if (!allFinite(full) || !allFinite(upFull) || atDefault < -45.0 || atDefault > -15.0 || atFull > -3.0 || atFull < atDefault + 10.0 ||
+            pedalUpDefault > -30.0 || pedalUpFull < pedalUpDefault + 10.0) {
             std::fprintf(stderr, "  !! sympathetic resonance level out of range\n"); ok = false;
         }
     }
@@ -1364,7 +1369,7 @@ bool testPlayability() {
         e->setParamNormalized(phs::kParamCondition, 1.0f);
         const float a = pitchOf(*e, 69), b = pitchOf(*e, 69);
         std::printf("  -> condition 100%%: A4 %.2f Hz twice: %.2f Hz (%.1f cents from 440)\n", a, b, cents(a, 440.0f));
-        if (std::fabs(a - b) > 0.05f || std::fabs(cents(a, 440.0f)) > 12.0f) { std::fprintf(stderr, "  !! condition not deterministic / too far\n"); ok = false; }
+        if (std::fabs(a - b) > 0.05f || std::fabs(cents(a, 440.0f)) > 25.0f) { std::fprintf(stderr, "  !! condition not deterministic / too far\n"); ok = false; }
     }
     return ok;
 }

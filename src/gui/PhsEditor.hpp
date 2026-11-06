@@ -45,6 +45,8 @@ public:
     Editor(PhsSynthEngine* engine, EditorHost host);
 
     void draw(Canvas& c);
+    // Draws only what `area` (logical coordinates) needs; the canvas is already clipped to it
+    void draw(Canvas& c, const Rect& area);
 
     // Input in logical coordinates (origin bottom-left, y up). timeSec is any monotonic clock.
     void mouseDown(float x, float y, bool fine, double timeSec);
@@ -57,6 +59,9 @@ public:
 
     // True when anything visible has changed since the last draw()
     bool wantsRedraw();
+    // What to repaint: nothing, the parts that animate on their own (meters, keys, analysers),
+    // or the whole editor (one rect covering it) when anything else changed
+    std::vector<Rect> dirtyRects();
     void detachEngine() { engine_ = nullptr; }
     // The zoom the platform view is drawing at (shown on the Play page)
     void setZoom(float zoom) { zoom_ = zoom; forceRedraw_ = true; }
@@ -86,6 +91,8 @@ private:
     void drawPage(Canvas& c);
     void drawLabMod(Canvas& c, const Rect& area);
     void drawLabMacros(Canvas& c, const Rect& area);
+    void drawLabFx(Canvas& c, const Rect& area);
+    void drawLfoView(Canvas& c, const Rect& r, int lfo);
     void drawLabSpace(Canvas& c, const Rect& area);
     void drawLabEq(Canvas& c, const Rect& area);
     void drawLabDynamics(Canvas& c, const Rect& area);
@@ -105,6 +112,14 @@ private:
     void drawSlider(Canvas& c, const Rect& r, uint32_t id, bool enabled = true);
     void drawScope(Canvas& c, const Rect& r);
     void addStepper(Canvas& c, const Rect& r, uint32_t id, bool enabled = true);
+    // Effect on/off switches: a small lit pill, clicked to toggle
+    void drawToggle(Canvas& c, const Rect& r, uint32_t id, const char* label = nullptr);
+    void addToggle(Canvas& c, const Rect& r, uint32_t id, const char* label = nullptr);
+    bool mouseDownToggle(float x, float y);
+    // The switch that turns off the effect a knob belongs to (kNumParams for none)
+    static uint32_t effectSwitchFor(uint32_t paramId);
+    bool effectOff(uint32_t paramId) const;
+    void setCustomTuningFromY(int pitchClass, float y);
     void addSlider(Canvas& c, const Rect& r, uint32_t id, bool enabled = true);
     void stepParam(uint32_t id, int dir);
     bool mouseDownModPanel(float x, float y, bool fine, double timeSec);
@@ -129,6 +144,11 @@ private:
     Rect presetListRect() const;
     void runMenuAction(int action);
     uint64_t stateHash() const;
+    // Parts of the editor that change on their own while sound plays, each with its own hash,
+    // so a meter moving repaints the meter and not the window
+    static constexpr int kNumLiveRegions = 3;
+    void liveRegions(Rect rects[kNumLiveRegions], uint64_t hashes[kNumLiveRegions]) const;
+    static bool overlaps(const Rect& a, const Rect& b) { return a.x < b.maxX() && b.x < a.maxX() && a.y < b.maxY() && b.y < a.maxY(); }
 
     PhsSynthEngine* engine_;
     EditorHost host_;
@@ -140,7 +160,15 @@ private:
     Rect strip_{};
     Rect stageRects_[3][2]{};
     float stageLabelX_[3]{};
-    Rect performance_{}, pedal_{}, pitchWheel_{}, modWheel_{}, keyboard_{};
+    Rect performance_{}, pedal_{}, pitchWheel_{}, modWheel_{}, keyboard_{}, easyArea_{};
+    // The four Easy knobs, in the performance strip on every page
+    std::vector<Knob> easyKnobs_;
+    int draggedEasyKnob_ = -1;
+    float effParams_[kNumParams]{};  // the parameters after the Easy knobs (refreshed every draw)
+    bool easyShifted_ = false;
+    struct Toggle { uint32_t paramId; Rect rect; const char* label; };
+    std::vector<Toggle> panelToggles_; // Sound page panel headers (fixed by the layout)
+    std::vector<Toggle> toggles_;      // the other pages' switches (rebuilt as they draw)
 
     // Preset browser (tab 6 = favourites; typing filters the list)
     bool browserOpen_ = false;
@@ -163,8 +191,9 @@ private:
     // Modulation & expression panel
     struct Stepper { uint32_t paramId; Rect rect; };
     struct Slider { uint32_t paramId; Rect rect; };
-    static constexpr int kNumPages = 7;
-    int page_ = 0;                     // 0 Sound, 1 Modulation, 2 Macros, 3 Space, 4 EQ, 5 Dynamics, 6 Play
+    enum Page { kPageSound, kPageMod, kPageMacros, kPageFx, kPageSpace, kPageEq, kPageDynamics, kPagePlay, kNumPages };
+    static constexpr float kPageTabWidths[kNumPages] = {72.0f, 56.0f, 76.0f, 46.0f, 66.0f, 46.0f, 88.0f, 56.0f};
+    int page_ = kPageSound;
     Rect pageTabs_[kNumPages]{};
     float pageBarY_ = 640.0f;
     std::vector<Knob> modKnobs_;
@@ -197,6 +226,10 @@ private:
     std::vector<TuningEntry> tunings_;
     std::string tuningError_;
     Rect tunePrev_{}, tuneNext_{}, tuneBox_{}, tuneLoad_{}, tuneFolder_{}, zoomPrev_{}, zoomNext_{};
+    // Custom tuning: the cents chart's bars are dragged up and down
+    Rect tunePlot_{};
+    float tuneBarX0_ = 0.0f, tuneBarW_ = 1.0f, tuneMid_ = 0.0f, tuneSpan_ = 1.0f;
+    int tuneDragPc_ = -1;
     float zoom_ = 1.0f;
 
     // A/B compare: two snapshots of every parameter, one of them live
@@ -214,6 +247,8 @@ private:
     int lastClickedKnob_ = -1;
     double lastClickTime_ = -1.0;
     uint64_t lastHash_ = 0;
+    uint64_t lastLive_[kNumLiveRegions]{};
+    Rect drawArea_{0, 0, 1e6f, 1e6f}; // the area the current draw() repaints
     bool forceRedraw_ = true;
 };
 

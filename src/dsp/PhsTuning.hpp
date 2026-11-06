@@ -245,6 +245,17 @@ public:
         return true;
     }
 
+    // A 12-note tuning given as each pitch class's offset from equal temperament (C = 0), the
+    // same in every octave: the Play page's custom scale
+    void setPitchClassOffsets(const float pc[12], const std::string& name) {
+        std::lock_guard<std::mutex> lock(textMutex_);
+        for (int k = 0; k < 128; ++k) cents_[static_cast<size_t>(k)].store(pc[k % 12], std::memory_order_relaxed);
+        name_ = name;
+        sclText_.clear();
+        kbmText_.clear();
+        generation_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     bool isEqualTemperament() const {
         std::lock_guard<std::mutex> lock(textMutex_);
         return sclText_.empty() && name_ == "12-TET";

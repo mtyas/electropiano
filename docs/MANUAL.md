@@ -111,9 +111,10 @@ of the polyphony, the **output meters** (peak L / R) and the compressor's gain r
 
 | Page | What it holds |
 |---|---|
-| **Sound** | The instrument panels: resonator, pickup, amp, filter, phaser, chorus, echo, reverb, output. |
-| **Mod** | Two LFOs, the six-slot modulation matrix, MPE expression, tempo sync and oversampling. |
+| **Sound** | The instrument panels: resonator, pickup, amp, filter, phaser, chorus, echo, reverb, output. Each effect has an **on / off** switch in its title. |
+| **Mod** | Two LFOs with a live view of each, the six-slot modulation matrix (each slot shows what it is doing right now), MPE expression, tempo sync and oversampling. |
 | **Macros** | Material, pickups, gap FM and morph. |
+| **FX** | The envelope filter, phaser and chorus with all their controls. |
 | **Space** | Cabinets and microphone, reverb and tape echo. |
 | **EQ** | A four-band parametric mastering equaliser with an interactive curve and live spectrum. |
 | **Dynamics** | Compressor and output limiter, with transfer curve and gain-reduction history. |
@@ -128,6 +129,7 @@ of the polyphony, the **output meters** (peak L / R) and the compressor's gain r
 - The orange arc shows the value; Bass and Treble arcs grow from the centre (cut ↔ boost).
 - A small blue tag such as `CC74` means the knob is mapped to a MIDI controller.
 - Larger knobs have a scale around them; the ticks the value has passed light up.
+- A knob whose effect is switched off is dimmed; it keeps its setting for when you switch it back on.
 
 ### Choosing from lists
 
@@ -140,9 +142,22 @@ oversampling quality all work this way. Switches with two states simply toggle.
 
 ![Keyboard strip](images/section_keyboard.png)
 
-A playable 61-key keyboard (keys light up for notes being played, from the mouse or MIDI),
+A playable 49-key keyboard (keys light up for notes being played, from the mouse or MIDI),
 a **Sustain** switch and the pitch / modulation wheel displays. The modulation wheel adds
 tremolo / vibrato depth.
+
+### Easy controls
+
+Four knobs to the right of the keyboard, on every page. Each one moves every setting behind one
+idea at once, as an offset on top of the panels (the panel knobs themselves don't move). At the
+centre they change nothing; double-click one to return it there.
+
+| Knob | Turned left | Turned right | What it moves |
+|---|---|---|---|
+| **Decay** | Shorter, drier | Longer, more ringing | Tine / reed decay, tone bar sustain, reverb decay, echo repeats, sympathetic resonance |
+| **Tone** | Darker, bassier | Brighter | Bass and treble, chime, hammer hardness, the EQ's low and high shelves, the miked cabinet's mic position |
+| **Drive** | Cleaner | Dirtier | Amp drive, cabinet drive, pickup distance, hammer hardness (with a small level trim) |
+| **Mod** | Less, down to none | Up to double | Every modulation matrix slot, tremolo / vibrato, phaser, chorus, envelope filter, gap FM and MPE pressure / slide. At 0 the matrix does nothing. |
 
 ---
 
@@ -236,15 +251,28 @@ The effects follow the amp, in this order:
 
 | Panel | Controls |
 |---|---|
-| **Env Filter** | An envelope-following resonant filter (auto-wah). **Amount** sets depth and mix; **Sens** sets how strongly your playing opens it. It sits in front of the amp, like a pedal. |
-| **Phaser** | 4-stage optical phaser: **Mix**, **Rate**. |
-| **Chorus** | Stereo BBD chorus: **Mix**. |
+| **Env Filter** | An envelope-following resonant filter (auto-wah). **Amount** sets depth and mix; **Sens** sets how strongly your playing opens it. It sits in front of the amp, like a pedal. More on the FX page. |
+| **Phaser** | Optical phaser: **Mix**, **Rate**. More on the FX page. |
+| **Chorus** | Stereo BBD chorus: **Mix**. More on the FX page. |
 | **Tape Echo** | **Mix**, **Time** (40 ms – 1 s), **Repeats**. Repeats darken and saturate like tape; changing the time glides the pitch, like a tape-speed change. |
 | **Reverb** | **Mix**, **Decay**. Hall or Spring: see [Space](#10-space-reverb-echo-and-cabinets). |
 | **Output** | Master **Volume**. |
 
 After the reverb come the [mastering EQ](#11-mastering-eq-and-dynamics), the **compressor** and
 the **limiter**, then the output.
+
+Every effect, the amp's tremolo (**TREM**), the EQ and the compressor has an **on / off** switch in
+its title bar. Switching off keeps every setting.
+
+### The FX page
+
+| Effect | Controls |
+|---|---|
+| **Envelope filter** | **Amount**, **Sens**, **Freq** (where it rests, 60 Hz – 1.9 kHz), **Resonance** (Q 0.7 – 14), **Release** (20 ms – 1 s), **Mode** (Classic, Low-pass, Band-pass, High-pass) and **Direction** (opens up or closes down as you play harder). |
+| **Phaser** | **Mix**, **Rate**, **Depth** (sweep width, 0 – 6 octaves), **Center** (100 Hz – 6.4 kHz), **Feedback** (−95 … +95 %: below zero hollows, above zero sings), **Stereo** (left / right sweep offset, 0 – 180°), **Stages** (2, 4, 6, 8, 12) and **Tempo Sync**. |
+| **Chorus** | **Mix**, **Rate** (0.05 – 8 Hz), **Depth**, **Delay** (2 – 20 ms: short is flanger-like, long is doubling), **Width** and **Mode** (Dual or Tri). |
+
+At their defaults the new controls sound exactly as the effects did before.
 
 ---
 
@@ -254,9 +282,14 @@ the **limiter**, then the output.
 
 ### LFOs and the modulation matrix
 
-Two LFOs (**LFO 1**, **LFO 2**) each have a **Rate** (0.05 – 40 Hz), a **Shape** (sine, triangle,
+Two LFOs (**LFO 1**, **LFO 2**) each have a **Rate** (0.05 – 400 Hz), a **Shape** (sine, triangle,
 saw, square, sample-and-hold) and a **Tempo Sync**: pick a division (1/1 … 1/8T) and the LFO locks
-to the host tempo; the Rate knob is parked while a division is chosen.
+to the host tempo; the Rate knob is parked while a division is chosen. The first three quarters of
+the Rate knob cover 0.05 – 7.5 Hz; the last quarter runs up to 400 Hz for audio-rate wobble and FM.
+
+Each LFO card shows its shape with a dot running along it at the LFO's speed (above about 30 Hz it
+says *audio rate* instead). Under each matrix slot's Amount, a blue bar shows what that slot is
+adding to its target right now, so you can see both the speed and the depth of every modulation.
 
 The **matrix** has six slots. Each slot reads a **source**, scales it by an **amount**
 (−100 % … +100 %) and adds it to a **target**. Click the source or target box to pick from a
@@ -272,7 +305,8 @@ list.
 
 Targets are 39 of the controls: the whole resonator, pickup, tone, amp and effects sections, plus
 Material, Gap FM, Morph, three EQ gains and the cabinet's mic position and distance. Targets keep
-their panel setting as the centre, so modulation never moves the knob itself.
+their panel setting as the centre, so modulation never moves the knob itself. The **Mod** easy knob
+scales every slot at once.
 
 ### Expression and MPE
 
@@ -415,11 +449,15 @@ The **Output Limiter** sits after the master volume: switch it on and nothing le
 ### Tuning and microtuning
 
 - **Tune** sets concert pitch (A4 = 415 – 466 Hz); **Transpose** moves the keyboard ±24 semitones.
-- **Scale** chooses a tuning: 12-TET, built-in just intonation, Pythagorean, quarter-comma meantone,
-  Werckmeister III, 19-, 24- and 31-EDO, and every **Scala** file (`.scl`) in your Tunings folder.
+- **Scale** chooses a tuning: 12-TET; just intonation (5- and 7-limit), Pythagorean and the
+  harmonic series; quarter-, sixth- and third-comma meantone, Werckmeister III, Kirnberger III,
+  Vallotti and Young; Maqam Rast and Bayati; Slendro and Pelog (approximations); 17-, 19-, 22-, 24-,
+  31- and 53-EDO, Bohlen-Pierce and Carlos Alpha; and every **Scala** file (`.scl`) in your Tunings folder.
   A `.kbm` keyboard mapping with the same name is used with its scale (keys it leaves unmapped stay
   silent). **Load .scl…** opens a file and copies it to the Tunings folder; **Tunings Folder** opens it.
-- The chart shows how far each note of one octave sits from equal temperament.
+- The chart shows how far each note of one octave sits from equal temperament. **Drag a bar** up or
+  down (±50 cents) to retune that note in every octave: the tuning becomes **Custom**, starting from
+  whichever scale was chosen, and is saved with the project.
 - With no `.kbm`, scale degree 0 is middle C and A4 is at the Tune frequency.
 - **MIDI Tuning Standard** SysEx (single-note and scale/octave tuning) retunes the instrument too.
 - The tuning is **saved with your project**, so it plays back the same on a machine without the file.
@@ -430,11 +468,13 @@ The Tunings folder is next to the Presets folder (for example
 ### Playing and realism
 
 - **Polyphony**: 8 – 64 voices. When it runs out, the quietest voice is taken, with a short fade.
-- **Condition**: each key gets its own small differences, as on a real, played instrument: tuning a
-  few cents off, uneven voicing, decay and hammer wear. The same key is always the same. 0 % is a
-  factory-perfect instrument.
+- **Condition**: each key gets its own differences, as on a real, played instrument: tuning off,
+  uneven voicing, decay and hammer wear. The same key is always the same. 0 % is a factory-perfect
+  instrument; low on the knob the differences are subtle, at 100 % keys are up to 20 cents out and
+  clearly uneven.
 - **Sympathetic**: with the sustain pedal down, the undamped tines ring along with what you play,
-  each at its own (tuned) pitch.
+  each at its own (tuned) pitch. Low on the knob it is a faint halo; at the top it is a strong
+  resonance, and the harp rings lightly even with the pedal up.
 - **Key Spread**: low keys to the left, high keys to the right.
 
 ### Editor and comparing
