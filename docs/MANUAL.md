@@ -1,6 +1,6 @@
 # electropiano — User Manual
 
-**Version 0.83** · by Matthew Tyas (mtyas) · GPL-3.0
+**Version 0.84** · by Matthew Tyas (mtyas) · GPL-3.0
 
 ![electropiano with a Rhodes Mk I preset and a chord held](images/editor_sound.png)
 
