@@ -119,7 +119,8 @@ int main(int argc, char** argv) {
             playChord(engine, {40, 47, 52, 56, 59, 64});
             auto settle = [&]() { for (int i = 0; i < 40; ++i) engine.processBlock(l, r, 512); };
             settle();
-            const float tabX[8] = {52, 116, 182, 253, 309, 376, 453, 514};
+            // Page tab centres: Sound, Mod, Macros, FX, Space, EQ, Dynamics, Play
+            const float tabX[8] = {52, 116, 182, 243, 299, 355, 422, 494};
             auto page = [&](int i, const char* name) {
                 ed->mouseDown(tabX[i], 655, false, 20.0 + i);
                 settle();
@@ -130,10 +131,22 @@ int main(int argc, char** argv) {
             shoot(view, "editor_mod_list.png");
             ed->keyAction(phs::gui::Key::Escape);
             page(2, "editor_macros.png");
-            page(3, "editor_space.png");
-            page(4, "editor_eq.png");
-            page(5, "editor_dynamics.png");
-            page(6, "editor_scope.png");
+            // FX: a resonant envelope filter, a six-stage phaser with negative feedback, a wide chorus
+            engine.setParamNormalized(kParamWahAmount, 0.45f);
+            engine.setParamNormalized(kParamWahReso, 0.72f);
+            engine.setParamNormalized(kParamPhaserMix, 0.55f);
+            engine.setParamNormalized(kParamPhaserStages, 0.5f);
+            engine.setParamNormalized(kParamPhaserFeedback, 0.32f);
+            engine.setParamNormalized(kParamChorusMix, 0.4f);
+            engine.setParamNormalized(kParamChorusWidth, 0.75f);
+            page(3, "editor_fx.png");
+            for (uint32_t id : {kParamWahAmount, kParamWahReso, kParamPhaserMix, kParamPhaserStages, kParamPhaserFeedback,
+                                kParamChorusMix, kParamChorusWidth}) {
+                engine.setParamNormalized(id, kParamMetadata[id].defaultValue);
+            }
+            page(4, "editor_space.png");
+            page(5, "editor_eq.png");
+            page(6, "editor_dynamics.png");
             // Play: just intonation loaded (the tuning arrow), a played-in instrument, a little spread
             engine.setParamNormalized(kParamCondition, 0.35f);
             engine.setParamNormalized(kParamStereoSpread, 0.4f);
@@ -144,6 +157,13 @@ int main(int argc, char** argv) {
             engine.getTuning().resetToEqual();
             ed->mouseDown(tabX[0], 655, false, 50.0);
             shoot(view, "editor_sound.png");
+            // Easy controls: Tone turned down, Drive up; the knobs they move show it
+            engine.setParamNormalized(kParamEasyTone, 0.25f);
+            engine.setParamNormalized(kParamEasyDrive, 0.75f);
+            settle();
+            shoot(view, "editor_easy.png");
+            engine.setParamNormalized(kParamEasyTone, 0.5f);
+            engine.setParamNormalized(kParamEasyDrive, 0.5f);
             engine.setParamNormalized(kParamMpeMode, 0.0f);
             for (int n : {40, 47, 52, 56, 59, 64}) engine.noteOff(n);
             for (int i = 0; i < 20; ++i) engine.processBlock(l, r, 512);

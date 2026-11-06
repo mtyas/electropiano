@@ -35,19 +35,27 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
   Amp (Suitcase / 200A circuit), mixed freely.
 - **100+ controls** across eight pages, with labels and read-outs that follow the stages you
   choose: hammer, tine/reed, pickup geometry, amp, envelope filter, phaser, chorus, tape echo, reverb.
+- **Easy controls** — **Decay**, **Tone**, **Drive** and **Mod** knobs beside the keyboard, each
+  moving every setting behind one idea at once; the knobs they move show where they've been taken.
+- **Effects in depth** — an FX page with a multi-mode envelope filter (resonance, release,
+  direction), a 2 – 12-stage phaser with feedback and stereo spread, and a chorus with rate, depth,
+  delay and width; every effect, the EQ and the compressor has an **on / off** switch.
 - **MPE and per-note expression** — per-note pitch bend (tines and reeds, even while they ring),
   pressure and slide; CLAP note expressions.
-- **Modulation matrix** — two LFOs (five shapes, tempo sync), six slots, nine sources, 39 targets.
+- **Modulation matrix** — two LFOs (five shapes, up to 400 Hz, tempo sync), six slots, nine
+  sources, 39 targets, with live views of each LFO and of what every slot is doing.
 - **"Impossible instrument" macros** — tine material (steel → glass → carbon), up to four pickups,
   audio-rate gap FM, and a tine ⇄ reed **morph** inside a held note.
 - **A mastering section** — four-band parametric EQ with an interactive curve and live spectrum,
   a full compressor and output limiter, nine miked cabinets with mic position, distance and room,
   spring or hall reverb, tempo-synced tremolo / phaser / echo, oversampled preamp.
 - **Played like the real thing** — repeated notes strike the still-ringing tine, half-pedalling,
-  sostenuto, soft pedal and release velocity, sympathetic resonance with the pedal down, and a
-  **Condition** control that gives every key its own small imperfections.
-- **Microtuning** — Scala `.scl` / `.kbm` files, built-in historical temperaments and EDOs, MIDI
-  Tuning Standard; saved with the project. Master tune, transpose, 8 – 64 voices.
+  sostenuto, soft pedal and release velocity, sympathetic resonance, and a **Condition** control
+  that gives every key its own imperfections, from subtle to well-worn.
+- **Microtuning** — Scala `.scl` / `.kbm` files, 24 built-in tunings (historical temperaments,
+  just and harmonic scales, maqams, gamelan, EDOs, Bohlen-Pierce), a **custom scale** you draw by
+  dragging each note, and MIDI Tuning Standard; saved with the project. Master tune, transpose,
+  8 – 64 voices.
 - **Studio hall and plate reverbs** with pre-delay, a tri-chorus, keyboard stereo spread.
 - **28 factory presets**, including OpenWurli's calibrated 200A and cross-instrument hybrids.
 - **One resizable editor on every platform** (75 – 200 %), MIDI learn, undo/redo, A/B compare,
@@ -75,7 +83,7 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 <td><img src="docs/images/editor_eq.png" alt="Mastering EQ"></td>
 </tr>
 <tr>
-<td align="center">Modulation, MPE and tempo sync</td>
+<td align="center">Modulation: live LFOs and matrix, MPE, tempo sync</td>
 <td align="center">Four-band mastering EQ with live spectrum</td>
 </tr>
 <tr>
@@ -87,11 +95,19 @@ amplifier**, or a **Wurlitzer reed on a Rhodes pickup**.
 <td align="center">Macros: material, pickups, gap FM, morph</td>
 </tr>
 <tr>
+<td><img src="docs/images/editor_fx.png" alt="FX page"></td>
+<td><img src="docs/images/editor_easy.png" alt="Easy controls"></td>
+</tr>
+<tr>
+<td align="center">FX: envelope filter, phaser and chorus in depth</td>
+<td align="center">Easy Tone and Drive: the knobs they move show where they've been taken</td>
+</tr>
+<tr>
 <td><img src="docs/images/editor_play.png" alt="Play page"></td>
 <td><img src="docs/images/editor_space.png" alt="Space page"></td>
 </tr>
 <tr>
-<td align="center">Play: Scala microtuning, pedals and realism, A/B, zoom</td>
+<td align="center">Play: tunings and a custom scale, pedals and realism, A/B, zoom</td>
 <td align="center">Space: cabinets, studio hall / plate / spring reverb, echo, chorus</td>
 </tr>
 </table>

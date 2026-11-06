@@ -148,9 +148,14 @@ tremolo / vibrato depth.
 
 ### Easy controls
 
+![Easy Tone turned down and Drive up: the knobs they move show a blue ring and the value you hear](images/editor_easy.png)
+
 Four knobs to the right of the keyboard, on every page. Each one moves every setting behind one
 idea at once, as an offset on top of the panels (the panel knobs themselves don't move). At the
-centre they change nothing; double-click one to return it there.
+centre they change nothing; double-click one to return it there. Every knob an easy control is
+moving shows it: a **blue ring** runs from the knob's own setting to where it really is, and its
+read-out turns blue and shows the value you hear (turn Tone down and you see Bass go up). The
+pointer stays on the knob's own setting, so you can still turn it as usual.
 
 | Knob | Turned left | Turned right | What it moves |
 |---|---|---|---|
@@ -265,6 +270,8 @@ Every effect, the amp's tremolo (**TREM**), the EQ and the compressor has an **o
 its title bar. Switching off keeps every setting.
 
 ### The FX page
+
+![The FX page](images/editor_fx.png)
 
 | Effect | Controls |
 |---|---|
@@ -579,6 +586,12 @@ Mappings are saved with your project.
   cabinet already shapes the tone like a real one would.
 - **Tone bar for pads.** High **Tone Bar** and long **Decay** give a blooming, shimmering
   sustain (preset *Ambient Tine Pad*).
+- **Start with the easy knobs.** **Tone**, **Decay** and **Drive** get a preset most of the way
+  to what you hear in your head; then fine-tune the knobs they light up in blue.
+- **Phaser as a resonator.** Twelve stages, a narrow **Depth** and **Feedback** near +90 % turn the
+  phaser into a tuned, singing filter; at −90 % it hollows the sound like a flanger.
+- **Audio-rate LFOs.** Push an LFO's Rate into the last quarter (hundreds of Hz) and route it to
+  **Air Gap** or **Drive** for metallic, ring-modulated tones.
 
 ---
 
@@ -639,9 +652,11 @@ the limiter has instant attack and a smooth release. The cabinets are procedural
 shelf, a presence peak, a short comb for off-axis, five early reflections). The editor draws the
 EQ and cabinet curves from the very same filters, so the curve is what you hear.
 
-**Editor.** One editor shared by all platforms. macOS draws it with CoreGraphics; Windows and
-Linux draw it with a built-in anti-aliased renderer using the Inter typeface, so it looks the
-same everywhere.
+**Editor.** One editor shared by all platforms. macOS draws it with CoreGraphics (gradients and
+shadows are rendered once and reused); Windows and Linux draw it with a built-in anti-aliased
+renderer using the Inter typeface, which fills shapes in spans and only anti-aliases their edges,
+so it looks the same everywhere. Only what changed is repainted: a moving meter, a key or the
+analyser redraws its own region, at 60 frames a second.
 
 ---
 
